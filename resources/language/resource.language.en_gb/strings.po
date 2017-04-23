@@ -59,7 +59,6 @@ msgctxt "#30011"
 msgid "Local caching system"
 msgstr ""
 
-# E.g. OK button
 msgctxt "#30012"
 msgid "OK"
 msgstr ""
