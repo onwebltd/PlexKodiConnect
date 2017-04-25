@@ -46,7 +46,7 @@ class VideoNodes(object):
     def viewNode(self, indexnumber, tagname, mediatype, viewtype, viewid, delete=False):
         # Plex: reassign mediatype due to Kodi inner workings
         # How many items do we get at most?
-        Return
+        return
         limit = window('fetch_pms_item_number')
         mediatypes = {
             'movie': 'movies',
