@@ -115,7 +115,7 @@ class Items(object):
                                 self.kodicursor)
         # Also get artwork for collections/movie sets
         if kodi_type == v.KODI_TYPE_MOVIE:
-            for setname in API.getCollections():
+            for setname in API.getSets():
                 log.debug('Getting artwork for movie set %s' % setname)
                 setid = self.kodi_db.createBoxset(setname)
                 self.artwork.addArtwork(API.getSetArtwork(),
@@ -243,8 +243,8 @@ class Movies(Items):
         shortplot = None
         tagline = API.getTagline()
         votecount = None
-        collections = API.getCollections()
-
+        collections = API.getSets()
+        colltags = API.getTags()
         rating = userdata['Rating']
         year = API.getYear()
         imdb = API.getProvider('imdb')
@@ -447,7 +447,7 @@ class Movies(Items):
         self.kodi_db.addStudios(movieid, studios, "movie")
         # Process tags: view, Plex collection tags
         tags = [viewtag]
-        tags.extend(collections)
+        tags.extend(colltags)
         if userdata['Favorite']:
             tags.append("Favorite movies")
         self.kodi_db.addTags(movieid, tags, "movie")

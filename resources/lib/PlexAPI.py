@@ -1326,6 +1326,30 @@ class API():
                     collections.append(child.attrib['tag'])
         return collections
 
+    def getSets(self):
+        """
+        Returns a list of PMS collection tags or an empty list
+        """
+        collections = []
+        for child in self.item:
+            if child.tag == 'Collection':
+                if child.attrib['tag']:
+                    if child.attrib['tag'].lower().endswith(" set"):
+                        collections.append(child.attrib['tag'])
+        return collections
+
+    def getTags(self):
+        """
+        Returns a list of PMS collection tags or an empty list
+        """
+        collections = []
+        for child in self.item:
+            if child.tag == 'Collection':
+                if child.attrib['tag']:
+                    if not child.attrib['tag'].lower().endswith(" set"):
+                        collections.append(child.attrib['tag'])
+        return collections
+
     def getPeople(self):
         """
         Returns a dict of lists of people found.
