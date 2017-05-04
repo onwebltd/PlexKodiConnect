@@ -362,6 +362,7 @@ class Movies(Items):
         # OR ADD THE MOVIE #####
         else:
             log.info("ADD movie itemid: %s - Title: %s" % (itemid, title))
+            log.info("BKLog movie: viewtag = %s : viewid = %s" % (viewtag, viewid))
             if v.KODIVERSION >= 17:
                 # add new ratings Kodi 17
                 rating_id = self.kodi_db.create_entry_rating()
@@ -2004,3 +2005,323 @@ class Music(Items):
                                    self.kodicursor)
         self.kodicursor.execute("DELETE FROM artist WHERE idArtist = ?",
                                 (kodiid,))
+
+
+class MusicVideos(Items):
+
+    @CatchExceptions(warnuser=True)
+    def add_update(self, item, viewtag=None, viewid=None):
+        # Process single musicvideo
+        log.info("BKLog mv: viewtag = %s : viewid = %s" % (viewtag, viewid))
+
+        kodicursor = self.kodicursor
+        plex_db = self.plex_db
+        artwork = self.artwork
+        API = PlexAPI.API(item)
+
+        # If the item already exist in the local Kodi DB we'll perform a full
+        # item update
+        # If the item doesn't exist, we'll add it to the database
+        update_item = True
+        itemid = API.getRatingKey()
+        # Cannot parse XML, abort
+        if not itemid:
+            log.error("Cannot parse XML data for musicvideo")
+            return
+        plex_dbitem = plex_db.getItem_byId(itemid)
+        try:
+            mvideoid = plex_dbitem[0]
+            fileid = plex_dbitem[1]
+            pathid = plex_dbitem[2]
+
+        except TypeError:
+            # mvideoid
+            update_item = False
+            kodicursor.execute("select coalesce(max(idMVideo),0) from musicvideo")
+            mvideoid = kodicursor.fetchone()[0] + 1
+
+        else:
+            # Verification the item is still in Kodi
+            query = "SELECT * FROM musicvideo WHERE idMVideo = ?"
+            kodicursor.execute(query, (idMVideo,))
+            try:
+                kodicursor.fetchone()[0]
+            except TypeError:
+                # item is not found, let's recreate it.
+                update_item = False
+                log.info("mvideoid: %s missing from Kodi, repairing the entry."
+                         % mvideoid)
+
+        # fileId information
+        checksum = API.getChecksum()
+        dateadded = API.getDateCreated()
+        userdata = API.getUserData()
+        playcount = userdata['PlayCount']
+        dateplayed = userdata['LastPlayedDate']
+        resume = userdata['Resume']
+        runtime = userdata['Runtime']
+
+        # item details
+        people = API.getPeople()
+        writer = API.joinList(people['Writer'])
+        director = API.joinList(people['Director'])
+        genres = API.getGenres()
+        genre = API.joinList(genres)
+        title, sorttitle = API.getTitle()
+        if " - " in title:
+            artist, title = title.split(" - ", 1)
+        else:
+            artist = 'Unknown'
+        track = -1
+        plot = API.getPlot()
+        shortplot = None
+        tagline = API.getTagline()
+        votecount = None
+        collections = API.getSets()
+        colltags = API.getTags()
+        rating = userdata['Rating']
+        year = API.getYear()
+        imdb = API.getProvider('imdb')
+        mpaa = API.getMpaa()
+        countries = API.getCountry()
+        country = API.joinList(countries)
+        album = country
+        studios = API.getStudios()
+        try:
+            studio = studios[0]
+        except IndexError:
+            studio = None
+
+        # Find one trailer
+        trailer = None
+        extras = API.getExtras()
+        for extra in extras:
+            # Only get 1st trailer element
+            if extra['extraType'] == 1:
+                trailer = ("plugin://plugin.video.plexkodiconnect/trailer/?"
+                           "id=%s&mode=play") % extra['key']
+                break
+
+        # GET THE FILE AND PATH #####
+        doIndirect = not self.directpath
+        if self.directpath:
+            # Direct paths is set the Kodi way
+            playurl = API.getFilePath(forceFirstMediaStream=True)
+            if playurl is None:
+                # Something went wrong, trying to use non-direct paths
+                doIndirect = True
+            else:
+                playurl = API.validatePlayurl(playurl, API.getType())
+                if playurl is None:
+                    return False
+                if "\\" in playurl:
+                    # Local path
+                    filename = playurl.rsplit("\\", 1)[1]
+                else:
+                    # Network share
+                    filename = playurl.rsplit("/", 1)[1]
+                path = playurl.replace(filename, "")
+        if doIndirect:
+            # Set plugin path and media flags using real filename
+            path = "plugin://plugin.video.plexkodiconnect/musicvideos/"
+            params = {
+                'filename': API.getKey(),
+                'id': itemid,
+                'dbid': mvideoid,
+                'mode': "play"
+            }
+            filename = "%s?%s" % (path, urlencode(params))
+            playurl = filename
+
+        # musicvideo table:
+        # c22 - playurl
+        # c23 - pathid
+        # This information is used later by file browser.
+
+        # add/retrieve pathid and fileid
+        # if the path or file already exists, the calls return current value
+        pathid = self.kodi_db.addPath(path)
+        fileid = self.kodi_db.addFile(filename, pathid)
+
+        # UPDATE THE MUSICVIDEO #####
+        if update_item:
+            log.info("UPDATE musicvideo itemid: %s - Title: %s"
+                     % (itemid, title))
+            # Update the musicvideo entry
+            if v.KODIVERSION >= 17:
+                # update new ratings Kodi 17
+                rating_id = self.kodi_db.get_ratingid(mvideoid,
+                                                      v.KODI_TYPE_MUSICVIDEO)
+                self.kodi_db.update_ratings(mvideoid,
+                                            v.KODI_TYPE_MUSICVIDEO,
+                                            "default",
+                                            rating,
+                                            votecount,
+                                            rating_id)
+                # update new uniqueid Kodi 17
+                uniqueid = self.kodi_db.get_uniqueid(mvideoid,
+                                                     v.KODI_TYPE_MUSICVIDEO)
+                self.kodi_db.update_uniqueid(mvideoid,
+                                             v.KODI_TYPE_MUSICVIDEO,
+                                             imdb,
+                                             "imdb",
+                                             uniqueid)
+                query = '''
+                    UPDATE musicvideo
+                    SET c00 = ?, c04 = ?, c05 = ?, c06 = ?, c07 = ?, c08 = ?, c09 = ?, c10 = ?, c11 = ?, c12 = ?, c13 = ?,
+                        c14 = ?, premiered = ?
+                    WHERE idMVideo = ?
+                '''
+                kodicursor.execute(query, (title, runtime, director, studio, year, plot, album, 
+                    artist, genre, track, playurl, pathid, year, mvideoid))
+            else:
+                query = '''
+                    UPDATE musicvideo
+                    SET c00 = ?, c01 = ?, c02 = ?, c03 = ?, c04 = ?, c05 = ?,
+                        c06 = ?, c07 = ?, c09 = ?, c10 = ?, c11 = ?, c12 = ?,
+                        c14 = ?, c15 = ?, c16 = ?, c18 = ?, c19 = ?, c21 = ?,
+                        c22 = ?, c23 = ?, idFile=?
+                    WHERE idMVideo = ?
+                '''
+                kodicursor.execute(query, (title, plot, shortplot, tagline,
+                    votecount, rating, writer, year, imdb, sorttitle, runtime,
+                    mpaa, genre, director, title, studio, trailer, country,
+                    playurl, pathid, fileid, mvideoid))
+
+        # OR ADD THE MUSICVIDEO #####
+        else:
+            log.info("ADD musicvideo itemid: %s - Title: %s" % (itemid, title))
+            if v.KODIVERSION >= 17:
+                # add new ratings Kodi 17
+                rating_id = self.kodi_db.create_entry_rating()
+                self.kodi_db.add_ratings(rating_id,
+                                         mvideoid,
+                                         v.KODI_TYPE_MUSICVIDEO,
+                                         "default",
+                                         rating,
+                                         votecount)
+                # add new uniqueid Kodi 17
+                # c00=title c04=runtime c05=director c06=studio c07=? c08=plot c09=album c10=artist c11=genre c12=track c13=playurl c14=pathid premiered=year
+                self.kodi_db.add_uniqueid(self.kodi_db.create_entry_uniqueid(),
+                                          mvideoid,
+                                          v.KODI_TYPE_MUSICVIDEO,
+                                          imdb,
+                                          "imdb")
+                query = '''
+                    INSERT INTO musicvideo(idMVideo, idFile, c00, c04, c05, c06, c07, c08, c09, 
+                        c10, c11, c12, c13, c14, premiered)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                '''
+
+                kodicursor.execute(query, (mvideoid, fileid, title, runtime, director, studio, year, plot, album, 
+                                           artist, genre, track, playurl, pathid, year))
+            else: #BK haven't bothered to update for < Kodi 17
+                query = '''
+                    INSERT INTO musicvideo(idMVideo, idFile, c00, c01, c02, c03,
+                        c04, c05, c06, c07, c09, c10, c11, c12, c14, c15, c16,
+                        c18, c19, c21, c22, c23)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?)
+                '''
+                kodicursor.execute(query, (mvideoid, fileid, title, plot,
+                    shortplot, tagline, votecount, rating, writer, year, imdb,
+                    sorttitle, runtime, mpaa, genre, director, title, studio,
+                    trailer, country, playurl, pathid))
+
+        # Create or update the reference in plex table Add reference is
+        # idempotent; the call here updates also fileid and pathid when item is
+        # moved or renamed
+        # BK: Technically this should probably use v.PLEX_TYPE_MOVIE -> KODI_TYPE_MUSICVIDEO as is stored in Plex as a Movie but but this seems less risky (also checked emby and that's how they do it)
+        plex_db.addReference(itemid,
+                             v.PLEX_TYPE_MUSICVIDEO,
+                             mvideoid,
+                             v.KODI_TYPE_MUSICVIDEO,
+                             kodi_fileid=fileid,
+                             kodi_pathid=pathid,
+                             parent_id=None,
+                             checksum=checksum,
+                             view_id=viewid)
+
+        # Update the path
+        query = ' '.join((
+
+            "UPDATE path",
+            "SET strPath = ?, strContent = ?, strScraper = ?, noUpdate = ?",
+            "WHERE idPath = ?"
+        ))
+        kodicursor.execute(query, (path, "musicvideos", "metadata.local", 1, pathid))
+
+        # Update the file
+        query = ' '.join((
+
+            "UPDATE files",
+            "SET idPath = ?, strFilename = ?, dateAdded = ?",
+            "WHERE idFile = ?"
+        ))
+        kodicursor.execute(query, (pathid, filename, dateadded, fileid))
+        
+        # Process countries
+        self.kodi_db.addCountries(mvideoid, countries, "musicvideo")
+        # Process cast
+        self.kodi_db.addPeople(mvideoid, API.getPeopleList(), "musicvideo")
+        # Process genres
+        self.kodi_db.addGenres(mvideoid, genres, "musicvideo")
+        # Process artwork
+        artwork.addArtwork(API.getAllArtwork(), mvideoid, "musicvideo", kodicursor)
+        # Process stream details
+        self.kodi_db.addStreams(fileid, API.getMediaStreams(), runtime)
+        # Process studios
+        self.kodi_db.addStudios(mvideoid, studios, "musicvideo")
+        # Process tags: view, Plex collection tags
+        tags = [viewtag]
+        tags.extend(colltags)
+        if userdata['Favorite']:
+            tags.append("Favorite musicvideos")
+        self.kodi_db.addTags(mvideoid, tags, "musicvideo")
+        # Add any sets from Plex collection tags
+        self.kodi_db.addSets(mvideoid, collections, kodicursor)
+        # Process playstates
+        self.kodi_db.addPlaystate(fileid, resume, runtime, playcount, dateplayed)
+
+    def remove(self, itemid):
+        # Remove mvideoid, fileid, plex reference
+        plex_db = self.plex_db
+        kodicursor = self.kodicursor
+        artwork = self.artwork
+
+        plex_dbitem = plex_db.getItem_byId(itemid)
+        try:
+            kodi_id = plex_dbitem[0]
+            file_id = plex_dbitem[1]
+            kodi_type = plex_dbitem[4]
+            log.info("Removing %sid: %s file_id: %s"
+                     % (kodi_type, kodi_id, file_id))
+        except TypeError:
+            return
+
+        # Remove the plex reference
+        plex_db.removeItem(itemid)
+        # Remove artwork
+        artwork.deleteArtwork(kodi_id, kodi_type, kodicursor)
+
+        if kodi_type == v.KODI_TYPE_MUSICVIDEO:
+            # Delete kodi musicvideo and file
+            kodicursor.execute("DELETE FROM musicvideo WHERE idMVideo = ?",
+                               (kodi_id,))
+            kodicursor.execute("DELETE FROM files WHERE idFile = ?",
+                               (file_id,))
+            if v.KODIVERSION >= 17:
+                self.kodi_db.remove_uniqueid(kodi_id, kodi_type)
+                self.kodi_db.remove_ratings(kodi_id, kodi_type)
+        elif kodi_type == v.KODI_TYPE_SET:
+            # Delete kodi boxset
+            boxset_musicvideos = plex_db.getItem_byParentId(kodi_id,
+                                                       v.KODI_TYPE_MUSICVIDEO)
+            for musicvideo in boxset_musicvideos:
+                plexid = musicvideo[0]
+                mvideoid = musicvideo[1]
+                self.kodi_db.removefromBoxset(mvideoid)
+                # Update plex reference
+                plex_db.updateParentId(plexid, None)
+            kodicursor.execute("DELETE FROM sets WHERE idSet = ?", (kodi_id,))
+        log.info("Deleted %s %s from kodi database" % (kodi_type, itemid))

@@ -32,6 +32,23 @@ from library_sync.process_metadata import Threaded_Process_Metadata
 import library_sync.sync_info as sync_info
 from library_sync.fanart import Process_Fanart_Thread
 
+
+REMOTE_DBG = False
+
+# append pydev remote debugger
+if REMOTE_DBG:
+    # Make pydev debugger works for auto reload.
+    # Note pydevd module need to be copied in XBMC\system\python\Lib\pysrc
+    try:
+        import sys
+        sys.path.append('C:\Programs\Kodi\system\python\Lib\pysrc')
+        import pydevd    # stdoutToServer and stderrToServer redirect stdout and stderr to eclipse console
+        pydevd.settrace('localhost', stdoutToServer=True, stderrToServer=True)
+    except ImportError:
+        sys.stderr.write("Error: " +
+            "You must add org.python.pydev.debug.pysrc to your PYTHONPATH.")
+        sys.exit(1)
+        
 ###############################################################################
 
 log = logging.getLogger("PLEX."+__name__)
@@ -294,6 +311,7 @@ class LibrarySync(Thread):
 
         process = {
             'movies': self.PlexMovies,
+            'musicvideos': self.PlexMusicVideos,
             'tvshows': self.PlexTVShows,
         }
         if self.enableMusic:
@@ -490,12 +508,14 @@ class LibrarySync(Thread):
         # For whatever freaking reason, .copy() or dict() does NOT work?!?!?!
         self.nodes = {
             v.PLEX_TYPE_MOVIE: [],
+            v.PLEX_TYPE_MUSICVIDEO: [],
             v.PLEX_TYPE_SHOW: [],
             v.PLEX_TYPE_ARTIST: [],
             v.PLEX_TYPE_PHOTO: []
         }
         self.playlists = {
             v.PLEX_TYPE_MOVIE: [],
+            v.PLEX_TYPE_MUSICVIDEO: [],
             v.PLEX_TYPE_SHOW: [],
             v.PLEX_TYPE_ARTIST: [],
             v.PLEX_TYPE_PHOTO: []
@@ -505,7 +525,7 @@ class LibrarySync(Thread):
         for view in sections:
             itemType = view.attrib['type']
             if (itemType in
-                    (v.PLEX_TYPE_MOVIE, v.PLEX_TYPE_SHOW, v.PLEX_TYPE_PHOTO)):
+                    (v.PLEX_TYPE_MOVIE, v.PLEX_TYPE_MUSICVIDEO, v.PLEX_TYPE_SHOW, v.PLEX_TYPE_PHOTO)):
                 self.sorted_views.append(view.attrib['title'])
         log.debug('Sorted views: %s' % self.sorted_views)
 
@@ -563,9 +583,12 @@ class LibrarySync(Thread):
         delete_movies = []
         delete_tv = []
         delete_music = []
+        delete_musicvideos = []
         for item in delete_items:
             if item['kodi_type'] == v.KODI_TYPE_MOVIE:
                 delete_movies.append(item)
+            if item['kodi_type'] == v.KODI_TYPE_MUSICVIDEO:
+                delete_musicvideos.append(item)
             elif item['kodi_type'] in v.KODI_VIDEOTYPES:
                 delete_tv.append(item)
             elif item['kodi_type'] in v.KODI_AUDIOTYPES:
@@ -579,6 +602,9 @@ class LibrarySync(Thread):
         for item in delete_movies:
             with itemtypes.Movies() as movie:
                 movie.remove(item['plex_id'])
+        for item in delete_musicvideos:
+            with itemtypes.MusicVideos() as musicvideo:
+                musicvideo.remove(item['plex_id'])
         for item in delete_tv:
             with itemtypes.TVShows() as tv:
                 tv.remove(item['plex_id'])
@@ -780,7 +806,7 @@ class LibrarySync(Thread):
 
         itemType = 'Movies'
 
-        views = [x for x in self.views if x['itemtype'] == v.KODI_TYPE_MOVIE]
+        views = [x for x in self.views if x['itemtype'] == v.KODI_TYPE_MOVIE and 'musicvideo' not in x['name']]
         log.info("Processing Plex %s. Libraries: %s" % (itemType, views))
 
         self.allKodiElementsId = {}
@@ -802,6 +828,7 @@ class LibrarySync(Thread):
             # Get items per view
             viewId = view['id']
             viewName = view['name']
+                
             all_plexmovies = GetPlexSectionResults(viewId, args=None)
             if all_plexmovies is None:
                 log.info("Couldnt get section items, aborting for view.")
@@ -832,6 +859,67 @@ class LibrarySync(Thread):
         log.info("%s sync is finished." % itemType)
         return True
 
+    @LogTime
+    def PlexMusicVideos(self):
+        # Initialize
+        self.allPlexElementsId = {}
+
+        itemType = 'MusicVideos'
+
+        views = [x for x in self.views if x['itemtype'] == v.KODI_TYPE_MOVIE and 'musicvideo' in x['name']]
+        log.info("Processing Plex %s. Libraries: %s" % (itemType, views))
+
+        self.allKodiElementsId = {}
+        if self.compare:
+            with plexdb.Get_Plex_DB() as plex_db:
+                # Get movies from Plex server
+                # Pull the list of movies and boxsets in Kodi
+                try:
+                    self.allKodiElementsId = dict(
+                        plex_db.getChecksum(v.PLEX_TYPE_MUSICVIDEO))
+                except ValueError:
+                    self.allKodiElementsId = {}
+
+        # PROCESS MUSICVIDEOS #####
+        self.updatelist = []
+        for view in views:
+            if self.threadStopped():
+                return False
+            # Get items per view
+            viewId = view['id']
+            viewName = view['name']
+                
+            all_plexmusicvideos = GetPlexSectionResults(viewId, args=None)
+            if all_plexmusicvideos is None:
+                log.info("Couldnt get section items, aborting for view.")
+                continue
+            elif all_plexmusicvideos == 401:
+                return False
+            # Populate self.updatelist and self.allPlexElementsId
+            self.GetUpdatelist(all_plexmusicvideos,
+                               itemType,
+                               'add_update',
+                               viewName,
+                               viewId)
+        self.GetAndProcessXMLs(itemType)
+        log.info("Processed view")
+        # Update viewstate for EVERY item
+        for view in views:
+            if self.threadStopped():
+                return False
+            self.PlexUpdateWatched(view['id'], itemType)
+
+        # PROCESS DELETES #####
+        if self.compare:
+            # Manual sync, process deletes
+            with itemtypes.MusicVideos() as MusicVideo:
+                for kodimusicvideo in self.allKodiElementsId:
+                    if kodimusicvideo not in self.allPlexElementsId:
+                        MusicVideo.remove(kodimusicvideo)
+        log.info("%s sync is finished." % itemType)
+        return True
+
+
     def PlexUpdateWatched(self, viewId, itemType,
                           lastViewedAt=None, updatedAt=None):
         """
@@ -855,7 +943,7 @@ class LibrarySync(Thread):
                       '%s' % (viewId, itemType, lastViewedAt, updatedAt))
             return
 
-        if itemType in ('Movies', 'TVShows'):
+        if itemType in ('Movies', 'MusicVideos', 'TVShows'):
             self.updateKodiVideoLib = True
         elif itemType in ('Music'):
             self.updateKodiMusicLib = True
@@ -1219,10 +1307,16 @@ class LibrarySync(Thread):
         viewid = xml.attrib.get('librarySectionID')
         if mediatype == v.PLEX_TYPE_MOVIE:
             self.videoLibUpdate = True
-            with itemtypes.Movies() as movie:
-                movie.add_update(xml[0],
-                                 viewtag=viewtag,
-                                 viewid=viewid)
+            if "musicvideo" in viewtag:
+                with itemtypes.MusicVideos() as musicvideo:
+                    musicvideo.add_update(xml[0],
+                                     viewtag=viewtag,
+                                     viewid=viewid)
+            else:
+                with itemtypes.Movies() as movie:
+                    movie.add_update(xml[0],
+                                     viewtag=viewtag,
+                                     viewid=viewid)
         elif mediatype == v.PLEX_TYPE_EPISODE:
             self.videoLibUpdate = True
             with itemtypes.TVShows() as show:
