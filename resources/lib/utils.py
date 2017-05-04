@@ -829,7 +829,7 @@ def CatchExceptions(warnuser=False):
     Decorator for methods to catch exceptions and log them. Useful for e.g.
     librarysync threads using itemtypes.py, because otherwise we would not
     get informed of crashes
-
+    
     warnuser=True:      sets the window flag 'plex_scancrashed' to true
                         which will trigger a Kodi infobox to inform user
     """
