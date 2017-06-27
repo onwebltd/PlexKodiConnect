@@ -11,17 +11,21 @@ from StringIO import StringIO
 from time import localtime, strftime, strptime
 from unicodedata import normalize
 import xml.etree.ElementTree as etree
-from functools import wraps
+from functools import wraps, partial
 from calendar import timegm
-from os import path as os_path
+from os.path import join
+from os import remove, walk, makedirs
+from shutil import rmtree
+from urllib import quote_plus
 
 import xbmc
 import xbmcaddon
 import xbmcgui
-import xbmcvfs
+from xbmcvfs import exists, delete
 
 from variables import DB_VIDEO_PATH, DB_MUSIC_PATH, DB_TEXTURE_PATH, \
-    DB_PLEX_PATH
+    DB_PLEX_PATH, KODI_PROFILE, KODIVERSION
+import state
 
 ###############################################################################
 
@@ -73,6 +77,19 @@ def pickl_window(property, value=None, clear=False, windowid=10000):
         return win.getProperty(property)
 
 
+def plex_command(key, value):
+    """
+    Used to funnel states between different Python instances. NOT really thread
+    safe - let's hope the Kodi user can't click fast enough
+
+        key:   state.py variable
+        value: either 'True' or 'False'
+    """
+    while window('plex_command'):
+        xbmc.sleep(5)
+    window('plex_command', value='%s-%s' % (key, value))
+
+
 def settings(setting, value=None):
     """
     Get or add addon setting. Returns unicode
@@ -87,6 +104,30 @@ def settings(setting, value=None):
     else:
         # Should return unicode by default, but just in case
         return tryDecode(addon.getSetting(setting))
+
+
+def exists_dir(path):
+    """
+    Safe way to check whether the directory path exists already (broken in Kodi
+    <17)
+
+    Feed with encoded string or unicode
+    """
+    if KODIVERSION >= 17:
+        answ = exists(tryEncode(path))
+    else:
+        dummyfile = join(tryDecode(path), 'dummyfile.txt')
+        try:
+            with open(dummyfile, 'w') as f:
+                f.write('text')
+        except IOError:
+            # folder does not exist yet
+            answ = 0
+        else:
+            # Folder exists. Delete file again.
+            delete(tryEncode(dummyfile))
+            answ = 1
+    return answ
 
 
 def language(stringid):
@@ -180,6 +221,23 @@ def tryDecode(string, encoding='utf-8'):
     return string
 
 
+def escape_html(string):
+    """
+    Escapes the following:
+        < to &lt;
+        > to &gt;
+        & to &amp;
+    """
+    escapes = {
+        '<': '&lt;',
+        '>': '&gt;',
+        '&': '&amp;'
+    }
+    for key, value in escapes.iteritems():
+        string = string.replace(key, value)
+    return string
+
+
 def DateToKodi(stamp):
     """
     converts a Unix time stamp (seconds passed sinceJanuary 1 1970) to a
@@ -196,27 +254,6 @@ def DateToKodi(stamp):
     except:
         localdate = None
     return localdate
-
-
-def IfExists(path):
-    """
-    Kodi's xbmcvfs.exists is broken - it caches the results for directories.
-
-    path: path to a directory (with a slash at the end)
-
-    Returns True if path exists, else false
-    """
-    dummyfile = tryEncode(os_path.join(path, 'dummyfile.txt'))
-    try:
-        etree.ElementTree(etree.Element('test')).write(dummyfile)
-    except:
-        # folder does not exist yet
-        answer = False
-    else:
-        # Folder exists. Delete file again.
-        xbmcvfs.delete(dummyfile)
-        answer = True
-    return answer
 
 
 def IntFromStr(string):
@@ -296,7 +333,7 @@ def reset():
         return
 
     # first stop any db sync
-    window('plex_shouldStop', value="true")
+    plex_command('STOP_SYNC', 'True')
     count = 10
     while window('plex_dbScan') == "true":
         log.debug("Sync is running, will retry: %s..." % count)
@@ -324,7 +361,7 @@ def reset():
     for row in rows:
         tablename = row[0]
         if tablename != "version":
-            cursor.execute("DELETE FROM " + tablename)
+            cursor.execute("DELETE FROM %s" % tablename)
     connection.commit()
     cursor.close()
 
@@ -337,7 +374,7 @@ def reset():
         for row in rows:
             tablename = row[0]
             if tablename != "version":
-                cursor.execute("DELETE FROM " + tablename)
+                cursor.execute("DELETE FROM %s" % tablename)
         connection.commit()
         cursor.close()
 
@@ -350,7 +387,7 @@ def reset():
     for row in rows:
         tablename = row[0]
         if tablename != "version":
-            cursor.execute("DELETE FROM " + tablename)
+            cursor.execute("DELETE FROM %s" % tablename)
     cursor.execute('DROP table IF EXISTS plex')
     cursor.execute('DROP table IF EXISTS view')
     connection.commit()
@@ -362,29 +399,19 @@ def reset():
               line1=language(39602)):
         log.info("Resetting all cached artwork.")
         # Remove all existing textures first
-        path = tryDecode(xbmc.translatePath("special://thumbnails/"))
-        if xbmcvfs.exists(path):
-            allDirs, allFiles = xbmcvfs.listdir(path)
-            for dir in allDirs:
-                allDirs, allFiles = xbmcvfs.listdir(path+dir)
-                for file in allFiles:
-                    if os_path.supports_unicode_filenames:
-                        xbmcvfs.delete(os_path.join(
-                            path + tryDecode(dir),
-                            tryDecode(file)))
-                    else:
-                        xbmcvfs.delete(os_path.join(
-                            tryEncode(path) + dir,
-                            file))
+        path = xbmc.translatePath("special://thumbnails/")
+        if exists(path):
+            rmtree(tryDecode(path), ignore_errors=True)
         # remove all existing data from texture DB
         connection = kodiSQL('texture')
         cursor = connection.cursor()
-        cursor.execute('SELECT tbl_name FROM sqlite_master WHERE type="table"')
+        query = 'SELECT tbl_name FROM sqlite_master WHERE type=?'
+        cursor.execute(query, ("table", ))
         rows = cursor.fetchall()
         for row in rows:
             tableName = row[0]
             if(tableName != "version"):
-                cursor.execute("DELETE FROM " + tableName)
+                cursor.execute("DELETE FROM %s" % tableName)
         connection.commit()
         cursor.close()
 
@@ -401,7 +428,7 @@ def reset():
         addondir = tryDecode(xbmc.translatePath(addon.getAddonInfo('profile')))
         dataPath = "%ssettings.xml" % addondir
         log.info("Deleting: settings.xml")
-        xbmcvfs.delete(tryEncode(dataPath))
+        remove(dataPath)
 
     # Kodi will now restart to apply the changes.
     dialog('ok',
@@ -440,6 +467,44 @@ def convertdate(date):
         date = datetime(*(strptime(date, "%Y-%m-%dT%H:%M:%SZ")[0:6]))
 
     return date
+
+
+def compare_version(current, minimum):
+    """
+    Returns True if current is >= then minimum. False otherwise. Returns True
+    if there was no valid input for current!
+
+    Input strings: e.g. "1.2.3"; always with Major, Minor and Patch!
+    """
+    log.info("current DB: %s minimum DB: %s" % (current, minimum))
+    try:
+        currMajor, currMinor, currPatch = current.split(".")
+    except ValueError:
+        # there WAS no current DB, e.g. deleted.
+        return True
+    minMajor, minMinor, minPatch = minimum.split(".")
+    currMajor = int(currMajor)
+    currMinor = int(currMinor)
+    currPatch = int(currPatch)
+    minMajor = int(minMajor)
+    minMinor = int(minMinor)
+    minPatch = int(minPatch)
+
+    if currMajor > minMajor:
+        return True
+    elif currMajor < minMajor:
+        return False
+
+    if currMinor > minMinor:
+        return True
+    elif currMinor < minMinor:
+        return False
+
+    if currPatch >= minPatch:
+        return True
+    else:
+        return False
+
 
 def normalize_nodes(text):
     # For video nodes
@@ -480,21 +545,24 @@ def normalize_string(text):
 
     return text
 
+
 def indent(elem, level=0):
-    # Prettify xml trees
+    """
+    Prettifies xml trees. Pass the etree root in
+    """
     i = "\n" + level*"  "
     if len(elem):
         if not elem.text or not elem.text.strip():
-          elem.text = i + "  "
+            elem.text = i + "  "
         if not elem.tail or not elem.tail.strip():
-          elem.tail = i
+            elem.tail = i
         for elem in elem:
-          indent(elem, level+1)
+            indent(elem, level+1)
         if not elem.tail or not elem.tail.strip():
-          elem.tail = i
+            elem.tail = i
     else:
         if level and (not elem.tail or not elem.tail.strip()):
-          elem.tail = i
+            elem.tail = i
 
 
 def guisettingsXML():
@@ -506,9 +574,16 @@ def guisettingsXML():
 
     try:
         xmlparse = etree.parse(xmlpath)
-    except:
+    except IOError:
         # Document is blank or missing
         root = etree.Element('settings')
+    except etree.ParseError:
+        log.error('Error parsing %s' % xmlpath)
+        # "Kodi cannot parse {0}. PKC will not function correctly. Please visit
+        # {1} and correct your file!"
+        dialog('ok', language(29999), language(39716).format(
+            'guisettings.xml', 'http://kodi.wiki/view/userdata'))
+        return
     else:
         root = xmlparse.getroot()
     return root
@@ -520,8 +595,8 @@ def __setXMLTag(element, tag, value, attrib=None):
     If "subelement" does not exist, create it using attrib and value.
 
         element : etree element
-        tag     : string/unicode for subelement
-        value   : string/unicode
+        tag     : unicode for subelement
+        value   : unicode
         attrib  : dict; will use etree attrib method
 
     Returns the subelement
@@ -548,44 +623,80 @@ def __setSubElement(element, subelement):
     return answ
 
 
-def advancedSettingsXML():
+def advancedsettings_xml(node_list, new_value=None, attrib=None,
+                         force_create=False):
     """
-    Kodi tweaks
+    Returns
+        etree element, tree
+    or
+        None, None
 
-    Changes advancedsettings.xml, musiclibrary:
-        backgroundupdate        set to "true"
+    node_list is a list of node names starting from the outside, ignoring the
+    outter advancedsettings. Example nodelist=['video', 'busydialogdelayms']
+    for the following xml would return the etree Element:
 
-    Overrides guisettings.xml in Kodi userdata folder:
-        updateonstartup  : set to "false"
-        usetags          : set to "false"
-        findremotethumbs : set to "false"
+        <busydialogdelayms>750</busydialogdelayms>
+
+    for the following example xml:
+
+    <?xml version="1.0" encoding="UTF-8" ?>
+    <advancedsettings>
+        <video>
+            <busydialogdelayms>750</busydialogdelayms>
+        </video>
+    </advancedsettings>
+
+    If new_value is set, '750' will be replaced accordingly, returning the new
+    etree Element. Advancedsettings might be generated if it did not exist
+    already
+
+    If the dict attrib is set, the Element's attributs will be appended
+    accordingly
+
+    force_create=True will forcibly create the key even if no value is provided
     """
-    path = tryDecode(xbmc.translatePath("special://profile/"))
-    xmlpath = "%sadvancedsettings.xml" % path
-
+    path = '%sadvancedsettings.xml' % KODI_PROFILE
     try:
-        xmlparse = etree.parse(xmlpath)
-    except:
+        tree = etree.parse(path)
+    except IOError:
         # Document is blank or missing
-        root = etree.Element('advancedsettings')
-    else:
-        root = xmlparse.getroot()
+        if new_value is None and attrib is None and force_create is False:
+            log.debug('Could not parse advancedsettings.xml, returning None')
+            return None, None
+        # Create topmost xml entry
+        tree = etree.ElementTree(element=etree.Element('advancedsettings'))
+    except etree.ParseError:
+        log.error('Error parsing %s' % path)
+        # "Kodi cannot parse {0}. PKC will not function correctly. Please visit
+        # {1} and correct your file!"
+        dialog('ok', language(29999), language(39716).format(
+            'advancedsettings.xml',
+            'http://kodi.wiki/view/Advancedsettings.xml'))
+        return None, None
+    root = tree.getroot()
+    element = root
 
-    music = __setSubElement(root, 'musiclibrary')
-    __setXMLTag(music, 'backgroundupdate', "true")
-    # __setXMLTag(music, 'updateonstartup', "false")
+    # Reading values
+    if new_value is None and attrib is None and force_create is False:
+        for node in node_list:
+            element = element.find(node)
+            if element is None:
+                break
+        return element, tree
 
-    # Subtag 'musicfiles'
-    # music = __setSubElement(root, 'musicfiles')
-    # __setXMLTag(music, 'usetags', "false")
-    # __setXMLTag(music, 'findremotethumbs', "false")
-
-    # Prettify and write to file
-    try:
-        indent(root)
-    except:
-        pass
-    etree.ElementTree(root).write(xmlpath)
+    # Setting new values. Get correct element first
+    for node in node_list:
+        element = __setSubElement(element, node)
+    # Write new values
+    element.text = new_value or ''
+    if attrib is not None:
+        for key, attribute in attrib.iteritems():
+            element.set(key, attribute)
+    # Indent and make readable
+    indent(root)
+    # Safe the changed xml
+    tree.write(path, encoding="UTF-8")
+    return element, tree
 
 
 def sourcesXML():
@@ -595,11 +706,17 @@ def sourcesXML():
 
     try:
         xmlparse = etree.parse(xmlpath)
-    except: # Document is blank or missing
+    except IOError:  # Document is blank or missing
         root = etree.Element('sources')
+    except etree.ParseError:
+        log.error('Error parsing %s' % xmlpath)
+        # "Kodi cannot parse {0}. PKC will not function correctly. Please visit
+        # {1} and correct your file!"
+        dialog('ok', language(29999), language(39716).format(
+            'sources.xml', 'http://kodi.wiki/view/sources.xml'))
+        return
     else:
         root = xmlparse.getroot()
-
 
     video = root.find('video')
     if video is None:
@@ -626,24 +743,32 @@ def sourcesXML():
     try:
         indent(root)
     except: pass
-    etree.ElementTree(root).write(xmlpath)
+    etree.ElementTree(root).write(xmlpath, encoding="UTF-8")
 
 
 def passwordsXML():
     # To add network credentials
     path = tryDecode(xbmc.translatePath("special://userdata/"))
     xmlpath = "%spasswords.xml" % path
+    dialog = xbmcgui.Dialog()
 
     try:
         xmlparse = etree.parse(xmlpath)
-    except: # Document is blank or missing
+    except IOError:
+        # Document is blank or missing
         root = etree.Element('passwords')
         skipFind = True
+    except etree.ParseError:
+        log.error('Error parsing %s' % xmlpath)
+        # "Kodi cannot parse {0}. PKC will not function correctly. Please visit
+        # {1} and correct your file!"
+        dialog.ok(language(29999), language(39716).format(
+            'passwords.xml', 'http://forum.kodi.tv/'))
+        return
     else:
         root = xmlparse.getroot()
         skipFind = False
 
-    dialog = xbmcgui.Dialog()
     credentials = settings('networkCreds')
     if credentials:
         # Present user with options
@@ -662,7 +787,8 @@ def passwordsXML():
                         paths.remove(path)
                         log.info("Successfully removed credentials for: %s"
                                  % credentials)
-                        etree.ElementTree(root).write(xmlpath)
+                        etree.ElementTree(root).write(xmlpath,
+                                                      encoding="UTF-8")
                         break
             else:
                 log.error("Failed to find saved server: %s in passwords.xml"
@@ -692,18 +818,19 @@ def passwordsXML():
         server = dialog.input("Enter the server name or IP address")
         if not server:
             return
+        server = quote_plus(server)
 
     # Network username
     user = dialog.input("Enter the network username")
     if not user:
         return
+    user = quote_plus(user)
     # Network password
     password = dialog.input("Enter the network password",
                             '',  # Default input
                             xbmcgui.INPUT_ALPHANUM,
                             xbmcgui.ALPHANUM_HIDE_INPUT)
     # Need to url-encode the password
-    from urllib import quote_plus
     password = quote_plus(password)
     # Add elements. Annoying etree bug where findall hangs forever
     if skipFind is False:
@@ -720,8 +847,6 @@ def passwordsXML():
         etree.SubElement(path, 'from', attrib={'pathversion': "1"}).text = "smb://%s/" % server
         topath = "smb://%s:%s@%s/" % (user, password, server)
         etree.SubElement(path, 'to', attrib={'pathversion': "1"}).text = topath
-        # Force Kodi to see the credentials without restarting
-        xbmcvfs.exists(topath)
 
     # Add credentials
     settings('networkCreds', value="%s" % server)
@@ -729,8 +854,9 @@ def passwordsXML():
     # Prettify and write to file
     try:
         indent(root)
-    except: pass
-    etree.ElementTree(root).write(xmlpath)
+    except:
+        pass
+    etree.ElementTree(root).write(xmlpath, encoding="UTF-8")
 
     # dialog.notification(
     #     heading="PlexKodiConnect",
@@ -738,6 +864,7 @@ def passwordsXML():
     #     icon="special://home/addons/plugin.video.plexkodiconnect/icon.png",
     #     time=5000,
     #     sound=False)
+
 
 def playlistXSP(mediatype, tagname, viewid, viewtype="", delete=False):
     """
@@ -753,32 +880,27 @@ def playlistXSP(mediatype, tagname, viewid, viewtype="", delete=False):
         xsppath = "%sPlex %s.xsp" % (path, viewid)
 
     # Create the playlist directory
-    if not xbmcvfs.exists(tryEncode(path)):
+    if not exists(tryEncode(path)):
         log.info("Creating directory: %s" % path)
-        xbmcvfs.mkdirs(tryEncode(path))
+        makedirs(path)
 
     # Only add the playlist if it doesn't already exists
-    if xbmcvfs.exists(tryEncode(xsppath)):
+    if exists(tryEncode(xsppath)):
         log.info('Path %s does exist' % xsppath)
         if delete:
-            xbmcvfs.delete(tryEncode(xsppath))
+            remove(xsppath)
             log.info("Successfully removed playlist: %s." % tagname)
-
         return
 
-    # Using write process since there's no guarantee the xml declaration works with etree
+    # Using write process since there's no guarantee the xml declaration works
+    # with etree
     itemtypes = {
         'homevideos': 'movies',
         'movie': 'movies',
         'show': 'tvshows'
     }
     log.info("Writing playlist file to: %s" % xsppath)
-    try:
-        f = xbmcvfs.File(tryEncode(xsppath), 'wb')
-    except:
-        log.error("Failed to create playlist: %s" % xsppath)
-        return
-    else:
+    with open(xsppath, 'wb') as f:
         f.write(tryEncode(
             '<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>\n'
             '<smartplaylist type="%s">\n\t'
@@ -789,36 +911,25 @@ def playlistXSP(mediatype, tagname, viewid, viewtype="", delete=False):
                 '</rule>\n'
             '</smartplaylist>\n'
             % (itemtypes.get(mediatype, mediatype), plname, tagname)))
-        f.close()
     log.info("Successfully added playlist: %s" % tagname)
 
-def deletePlaylists():
 
+def deletePlaylists():
     # Clean up the playlists
     path = tryDecode(xbmc.translatePath("special://profile/playlists/video/"))
-    dirs, files = xbmcvfs.listdir(tryEncode(path))
-    for file in files:
-        if tryDecode(file).startswith('Plex'):
-            xbmcvfs.delete(tryEncode("%s%s" % (path, tryDecode(file))))
+    for root, _, files in walk(path):
+        for file in files:
+            if file.startswith('Plex'):
+                remove(join(root, file))
 
 def deleteNodes():
-
     # Clean up video nodes
-    import shutil
     path = tryDecode(xbmc.translatePath("special://profile/library/video/"))
-    dirs, files = xbmcvfs.listdir(tryEncode(path))
-    for dir in dirs:
-        if tryDecode(dir).startswith('Plex'):
-            try:
-                shutil.rmtree("%s%s" % (path, tryDecode(dir)))
-            except:
-                log.error("Failed to delete directory: %s" % tryDecode(dir))
-    for file in files:
-        if tryDecode(file).startswith('plex'):
-            try:
-                xbmcvfs.delete(tryEncode("%s%s" % (path, tryDecode(file))))
-            except:
-                log.error("Failed to file: %s" % tryDecode(file))
+    for root, dirs, _ in walk(path):
+        for directory in dirs:
+            if directory.startswith('Plex-'):
+                rmtree(join(root, directory))
+        break
 
 
 ###############################################################################
@@ -859,83 +970,83 @@ def LogTime(func):
         result = func(*args, **kwargs)
         elapsedtotal = datetime.now() - starttotal
         log.info('It took %s to run the function %s'
-                  % (elapsedtotal, func.__name__))
+                 % (elapsedtotal, func.__name__))
         return result
     return wrapper
 
 
-def ThreadMethodsAdditionalStop(windowAttribute):
-    """
-    Decorator to replace stopThread method to include the Kodi windowAttribute
-
-    Use with any sync threads. @ThreadMethods still required FIRST
-    """
-    def wrapper(cls):
-        def threadStopped(self):
-            return (self._threadStopped or
-                    (window('plex_terminateNow') == "true") or
-                    window(windowAttribute) == "true")
-        cls.threadStopped = threadStopped
-        return cls
-    return wrapper
-
-
-def ThreadMethodsAdditionalSuspend(windowAttribute):
-    """
-    Decorator to replace threadSuspended(): thread now also suspends if a
-    Kodi windowAttribute is set to 'true', e.g. 'suspend_LibraryThread'
-
-    Use with any library sync threads. @ThreadMethods still required FIRST
-    """
-    def wrapper(cls):
-        def threadSuspended(self):
-            return (self._threadSuspended or
-                    window(windowAttribute) == 'true')
-        cls.threadSuspended = threadSuspended
-        return cls
-    return wrapper
-
-
-def ThreadMethods(cls):
+def thread_methods(cls=None, add_stops=None, add_suspends=None):
     """
     Decorator to add the following methods to a threading class:
 
-    suspendThread():    pauses the thread
-    resumeThread():     resumes the thread
-    stopThread():       stopps/kills the thread
+    suspend_thread():    pauses the thread
+    resume_thread():     resumes the thread
+    stop_thread():       stopps/kills the thread
 
-    threadSuspended():  returns True if thread is suspend_thread
-    threadStopped():    returns True if thread is stopped (or should stop ;-))
-                        ALSO stops if Kodi is exited
+    thread_suspended():  returns True if thread is suspended
+    thread_stopped():    returns True if thread is stopped (or should stop ;-))
+                         ALSO returns True if PKC should exit
 
     Also adds the following class attributes:
-        _threadStopped
-        _threadSuspended
+        __thread_stopped
+        __thread_suspended
+        __stops
+        __suspends
+
+    invoke with either
+        @Newthread_methods
+        class MyClass():
+    or
+        @Newthread_methods(add_stops=['SUSPEND_LIBRARY_TRHEAD'],
+                          add_suspends=['DB_SCAN', 'WHATEVER'])
+        class MyClass():
     """
+    # So we don't need to invoke with ()
+    if cls is None:
+        return partial(thread_methods,
+                       add_stops=add_stops,
+                       add_suspends=add_suspends)
+    # Because we need a reference, not a copy of the immutable objects in
+    # state, we need to look up state every time explicitly
+    cls.__stops = ['STOP_PKC']
+    if add_stops is not None:
+        cls.__stops.extend(add_stops)
+    cls.__suspends = add_suspends or []
+
     # Attach new attributes to class
-    cls._threadStopped = False
-    cls._threadSuspended = False
+    cls.__thread_stopped = False
+    cls.__thread_suspended = False
 
     # Define new class methods and attach them to class
-    def stopThread(self):
-        self._threadStopped = True
-    cls.stopThread = stopThread
+    def stop_thread(self):
+        self.__thread_stopped = True
+    cls.stop_thread = stop_thread
 
-    def suspendThread(self):
-        self._threadSuspended = True
-    cls.suspendThread = suspendThread
+    def suspend_thread(self):
+        self.__thread_suspended = True
+    cls.suspend_thread = suspend_thread
 
-    def resumeThread(self):
-        self._threadSuspended = False
-    cls.resumeThread = resumeThread
+    def resume_thread(self):
+        self.__thread_suspended = False
+    cls.resume_thread = resume_thread
 
-    def threadSuspended(self):
-        return self._threadSuspended
-    cls.threadSuspended = threadSuspended
+    def thread_suspended(self):
+        if self.__thread_suspended is True:
+            return True
+        for suspend in self.__suspends:
+            if getattr(state, suspend):
+                return True
+        return False
+    cls.thread_suspended = thread_suspended
 
-    def threadStopped(self):
-        return self._threadStopped or (window('plex_terminateNow') == 'true')
-    cls.threadStopped = threadStopped
+    def thread_stopped(self):
+        if self.__thread_stopped is True:
+            return True
+        for stop in self.__stops:
+            if getattr(state, stop):
+                return True
+        return False
+    cls.thread_stopped = thread_stopped
 
     # Return class to render this a decorator
     return cls

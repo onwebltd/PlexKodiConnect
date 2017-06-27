@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 import logging
-from re import compile as re_compile
 
 from xbmc import Player
 
@@ -12,8 +11,6 @@ from PlexFunctions import GetPlexKeyNumber
 ###############################################################################
 
 log = logging.getLogger("PLEX."+__name__)
-
-REGEX_PLAYQUEUES = re_compile(r'''/playQueues/(\d+)$''')
 
 ###############################################################################
 
@@ -113,11 +110,19 @@ def process_command(request_path, params, queue=None):
             'data': params
         })
 
+    elif request_path == 'player/playback/refreshPlayQueue':
+        queue.put({
+            'action': 'refreshPlayQueue',
+            'data': params
+        })
+
     elif request_path == "player/playback/setParameters":
         if 'volume' in params:
             volume = int(params['volume'])
             log.debug("Adjusting the volume to %s" % volume)
             JSONRPC('Application.SetVolume').execute({"volume": volume})
+        else:
+            log.error('Unknown parameters: %s' % params)
 
     elif request_path == "player/playback/play":
         for playerid in getPlayerIds():

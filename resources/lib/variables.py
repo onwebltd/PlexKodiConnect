@@ -2,6 +2,9 @@
 import xbmc
 from xbmcaddon import Addon
 
+# Paths are in unicode, otherwise Windows will throw fits
+# For any file operations with KODI function, use encoded strings!
+
 
 def tryDecode(string, encoding='utf-8'):
     """
@@ -27,7 +30,7 @@ ADDON_VERSION = _ADDON.getAddonInfo('version')
 KODILANGUAGE = xbmc.getLanguage(xbmc.ISO_639_1)
 KODIVERSION = int(xbmc.getInfoLabel("System.BuildVersion")[:2])
 KODILONGVERSION = xbmc.getInfoLabel('System.BuildVersion')
-KODI_PROFILE = xbmc.translatePath("special://profile")
+KODI_PROFILE = tryDecode(xbmc.translatePath("special://profile"))
 
 if xbmc.getCondVisibility('system.platform.osx'):
     PLATFORM = "MacOSX"
@@ -66,7 +69,7 @@ _DB_VIDEO_VERSION = {
     15: 93,   # Isengard
     16: 99,   # Jarvis
     17: 107,  # Krypton
-    18: 107   # Leia
+    18: 108   # Leia
 }
 DB_VIDEO_PATH = tryDecode(xbmc.translatePath(
     "special://database/MyVideos%s.db" % _DB_VIDEO_VERSION[KODIVERSION]))
@@ -77,7 +80,7 @@ _DB_MUSIC_VERSION = {
     15: 52,   # Isengard
     16: 56,   # Jarvis
     17: 60,   # Krypton
-    18: 60    # Leia
+    18: 62    # Leia
 }
 DB_MUSIC_PATH = tryDecode(xbmc.translatePath(
     "special://database/MyMusic%s.db" % _DB_MUSIC_VERSION[KODIVERSION]))
@@ -94,6 +97,9 @@ DB_TEXTURE_PATH = tryDecode(xbmc.translatePath(
     "special://database/Textures%s.db" % _DB_TEXTURE_VERSION[KODIVERSION]))
 
 DB_PLEX_PATH = tryDecode(xbmc.translatePath("special://database/plex.db"))
+
+EXTERNAL_SUBTITLE_TEMP_PATH = tryDecode(xbmc.translatePath(
+    "special://profile/addon_data/%s/temp/" % ADDON_ID))
 
 
 # Multiply Plex time by this factor to receive Kodi time

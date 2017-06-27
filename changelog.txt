@@ -1,3 +1,114 @@
+version 1.8.3:
+- Fix Kodi playlists being empty
+
+version 1.8.2:
+- Choose to replace user ratings with the number of available versions of a media file
+- More collection artwork: use TheMovieDB art
+- Support new Companion command "refreshPlayQueue"
+- Use https for TheMovieDB
+- Update translations
+
+version 1.8.1:
+- Fix library sync crash due to UnicodeDecodeError
+- Fix fanart for collections
+- Comply with themoviedb.org terms of use 
+- Add some translations
+
+version 1.8.0
+Featuring:
+- Major music overhaul: Direct Paths should now work! Many thanks @Memesa for the pointers! Don't forget to reset your database
+- Big transcoding overhaul
+- Many Plex Companion fixes
+- Add support to Kodi 18.0-alpha1 (thanks @CotzaDev)
+
+version 1.7.22 (beta only)
+- Fix playback stop not being recognized by the PMS
+- Better way to sync progress to another account 
+
+version 1.7.21 (beta only)
+- Fix Playback and watched status not syncing
+- Fix PKC syncing progress to wrong account
+- Warn user if a xml cannot be parsed
+
+version 1.7.20 (beta only)
+- Fix for Windows usernames with non-ASCII chars
+- Companion: Fix TypeError
+- Use SSL settings when checking server connection
+- Fix TypeError when PMS connection lost
+- Increase timeout
+
+version 1.7.19 (beta only)
+- Big code refactoring
+- Many Plex Companion fixes
+- Fix WindowsError or alike when deleting video nodes
+- Remove restart on first setup 
+- Only set advancedsettings tweaks if Music enabled 
+
+version 1.7.18 (beta only)
+- Fix OperationalError when resetting PKC 
+- Fix possible OperationalErrors
+- Companion: ensure sockets get closed
+- Fix TypeError for Plex Companion
+- Update Czech
+
+version 1.7.17 (beta only)
+- Don't add media by other add-ons to queue
+- Fix KeyError for Plex Companion
+- Repace Kodi mkdirs with os.makedirs
+- Use xbmcvfs exists instead of os.path.exists 
+
+version 1.7.16 (beta only)
+- Fix PKC complaining about files not found
+- Fix multiple subtitles per language not showing
+- Update Czech translation
+- Fix too many arguments when marking 100% watched
+- More small fixes
+
+version 1.7.15 (beta only)
+- Fix companion for "Playback via PMS"
+- Change sleeping behavior for playqueue client
+- Plex Companion: add itemType to playstate
+- Less logging
+
+version 1.7.14 (beta only)
+- Fix TypeError, but for real now 
+
+version 1.7.13 (beta only)
+- Fix TypeError with AdvancedSettings.xml missing
+
+version 1.7.12 (beta only)
+- Major music overhaul: Direct Paths should now work! Many thanks @Memesa for the pointers! Don't forget to reset your database
+- Some Plex Companion fixes
+- Fix UnicodeDecodeError on user switch
+- Remove link to Crowdin.com
+- Update Readme
+
+version 1.7.11 (beta only)
+- Add support to Kodi 18.0-alpha1 (thanks @CotzaDev)
+- Fix PKC not storing network credentials correctly
+
+version 1.7.10 (beta only)
+- Avoid xbmcvfs entirely; use encoded paths 
+- Update Czech translation
+
+version 1.7.9 (beta only)
+- Big transcoding overhaul
+- Fix for not detecting external subtitle language
+- Change Plex transcoding profile to Android
+- Use Kodi video cache setting for transcoding
+- Fix TheTVDB ID for TV shows 
+- Account for missing IMDB ids for movies
+- Account for missing TheTVDB ids
+- Fix UnicodeDecodeError on user switch
+- Update English, Spanish and German
+
+version 1.7.8 (beta only)
+- Fix IMDB id for movies (resync by going to the PKC settings, Advanced, then Repair Local Database)
+- Increase timeouts for PMS, should fix some connection issues
+- Move translations to new strings.po system
+- Fix some TypeErrors
+- Some code refactoring
+
 version 1.7.7
 - Chinese Traditional, thanks @old2tan
 - Chinese Simplified, thanks @everdream

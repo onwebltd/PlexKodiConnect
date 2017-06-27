@@ -1,16 +1,19 @@
 import logging
 from urllib import quote
 from urlparse import parse_qsl, urlsplit
+from re import compile as re_compile
 
 import plexdb_functions as plexdb
 from downloadutils import DownloadUtils as DU
-from utils import JSONRPC, tryEncode
+from utils import JSONRPC, tryEncode, escape_html
 from PlexAPI import API
+from PlexFunctions import GetPlexMetadata
 
 ###############################################################################
 
 log = logging.getLogger("PLEX."+__name__)
 
+REGEX = re_compile(r'''metadata%2F(\d+)''')
 ###############################################################################
 
 # kodi_item dict:
@@ -29,6 +32,8 @@ class Playlist_Object_Baseclase(object):
     selectedItemOffset = None
     shuffled = 0          # [int], 0: not shuffled, 1: ??? 2: ???
     repeat = 0            # [int], 0: not repeated, 1: ??? 2: ???
+    # If Companion playback is initiated by another user
+    plex_transient_token = None
 
     def __repr__(self):
         answ = "<%s: " % (self.__class__.__name__)
@@ -58,10 +63,8 @@ class Playlist_Object_Baseclase(object):
         self.selectedItemOffset = None
         self.shuffled = 0
         self.repeat = 0
+        self.plex_transient_token = None
         log.debug('Playlist cleared: %s' % self)
-
-    def log_Kodi_playlist(self):
-        log.debug('Current Kodi playlist: %s' % get_kodi_playlist_items(self))
 
 
 class Playlist_Object(Playlist_Object_Baseclase):
@@ -75,6 +78,7 @@ class Playqueue_Object(Playlist_Object_Baseclase):
 class Playlist_Item(object):
     ID = None               # Plex playlist/playqueue id, e.g. playQueueItemID
     plex_id = None          # Plex unique item id, "ratingKey"
+    plex_type = None        # Plex type, e.g. 'movie', 'clip'
     plex_UUID = None        # Plex librarySectionUUID
     kodi_id = None          # Kodi unique kodi id (unique only within type!)
     kodi_type = None        # Kodi type: 'movie'
@@ -102,20 +106,22 @@ def playlist_item_from_kodi(kodi_item):
     """
     item = Playlist_Item()
     item.kodi_id = kodi_item.get('id')
+    item.kodi_type = kodi_item.get('type')
     if item.kodi_id:
         with plexdb.Get_Plex_DB() as plex_db:
             plex_dbitem = plex_db.getItem_byKodiId(kodi_item['id'],
                                                    kodi_item['type'])
         try:
             item.plex_id = plex_dbitem[0]
+            item.plex_type = plex_dbitem[2]
             item.plex_UUID = plex_dbitem[0]     # we dont need the uuid yet :-)
         except TypeError:
             pass
     item.file = kodi_item.get('file')
-    if item.file is not None and item.plex_id is None:
-        item.plex_id = dict(
-            parse_qsl(urlsplit(item.file).query)).get('plex_id')
-    item.kodi_type = kodi_item.get('type')
+    if item.plex_id is None and item.file is not None:
+        query = dict(parse_qsl(urlsplit(item.file).query))
+        item.plex_id = query.get('plex_id')
+        item.plex_type = query.get('itemType')
     if item.plex_id is None:
         item.uri = 'library://whatever/item/%s' % quote(item.file, safe='')
     else:
@@ -137,13 +143,14 @@ def playlist_item_from_plex(plex_id):
     with plexdb.Get_Plex_DB() as plex_db:
         plex_dbitem = plex_db.getItem_byId(plex_id)
     try:
+        item.plex_type = plex_dbitem[5]
         item.kodi_id = plex_dbitem[0]
         item.kodi_type = plex_dbitem[4]
     except:
         raise KeyError('Could not find plex_id %s in database' % plex_id)
     item.plex_UUID = plex_id
     item.uri = ('library://%s/item/library%%2Fmetadata%%2F%s' %
-        (item.plex_UUID, plex_id))
+                (item.plex_UUID, plex_id))
     log.debug('Made playlist item from plex: %s' % item)
     return item
 
@@ -155,8 +162,11 @@ def playlist_item_from_xml(playlist, xml_video_element):
     item = Playlist_Item()
     api = API(xml_video_element)
     item.plex_id = api.getRatingKey()
+    item.plex_type = api.getType()
     item.ID = xml_video_element.attrib['%sItemID' % playlist.kind]
     item.guid = xml_video_element.attrib.get('guid')
+    if item.guid is not None:
+        item.guid = escape_html(item.guid)
     if item.plex_id:
         with plexdb.Get_Plex_DB() as plex_db:
             db_element = plex_db.getItem_byId(item.plex_id)
@@ -312,8 +322,6 @@ def add_item_to_PMS_playlist(playlist, pos, plex_id=None, kodi_item=None):
 
     WILL ALSO UPDATE OUR PLAYLISTS
     """
-    log.debug('Adding new item plex_id: %s, kodi_item: %s on the Plex side at '
-              'position %s for %s' % (plex_id, kodi_item, pos, playlist))
     if plex_id:
         try:
             item = playlist_item_from_plex(plex_id)
@@ -336,7 +344,7 @@ def add_item_to_PMS_playlist(playlist, pos, plex_id=None, kodi_item=None):
     # Get the guid for this item
     for plex_item in xml:
         if plex_item.attrib['%sItemID' % playlist.kind] == item.ID:
-            item.guid = plex_item.attrib['guid']
+            item.guid = escape_html(plex_item.attrib['guid'])
     playlist.items.append(item)
     if pos == len(playlist.items) - 1:
         # Item was added at the end
@@ -530,9 +538,10 @@ def add_listitem_to_Kodi_playlist(playlist, pos, listitem, file,
     # We need to add this to our internal queue as well
     if xml_video_element is not None:
         item = playlist_item_from_xml(playlist, xml_video_element)
-        item.file = file
     else:
         item = playlist_item_from_kodi(kodi_item)
+    if file is not None:
+        item.file = file
     playlist.items.insert(pos, item)
     log.debug('Done inserting for %s' % playlist)
 
@@ -557,3 +566,39 @@ def remove_from_Kodi_playlist(playlist, pos):
             del playlist.items[pos]
         except IndexError:
             log.error('Cannot delete position %s for %s' % (pos, playlist))
+
+
+def get_pms_playqueue(playqueue_id):
+    """
+    Returns the Plex playqueue as an etree XML or None if unsuccessful
+    """
+    xml = DU().downloadUrl(
+        "{server}/playQueues/%s" % playqueue_id,
+        headerOptions={'Accept': 'application/xml'})
+    try:
+        xml.attrib
+    except AttributeError:
+        log.error('Could not download Plex playqueue %s' % playqueue_id)
+        xml = None
+    return xml
+
+
+def get_plextype_from_xml(xml):
+    """
+    Needed if PMS returns an empty playqueue. Will get the Plex type from the
+    empty playlist playQueueSourceURI. Feed with (empty) etree xml
+
+    returns None if unsuccessful
+    """
+    try:
+        plex_id = REGEX.findall(xml.attrib['playQueueSourceURI'])[0]
+    except IndexError:
+        log.error('Could not get plex_id from xml: %s' % xml.attrib)
+        return
+    new_xml = GetPlexMetadata(plex_id)
+    try:
+        new_xml[0].attrib
+    except (TypeError, IndexError, AttributeError):
+        log.error('Could not get plex metadata for plex id %s' % plex_id)
+        return
+    return new_xml[0].attrib.get('type')

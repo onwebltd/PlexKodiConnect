@@ -6,12 +6,15 @@ import logging
 import xbmc
 import xbmcgui
 
-from utils import settings, window, language as lang, tryEncode
+from utils import settings, window, language as lang, tryEncode, \
+    advancedsettings_xml
 import downloadutils
 from userclient import UserClient
 
 from PlexAPI import PlexAPI
 from PlexFunctions import GetMachineIdentifier, get_PMS_settings
+import state
+from migration import check_migration
 
 ###############################################################################
 
@@ -80,7 +83,7 @@ class InitialSetup():
             answer = False
         else:
             log.info('plex.tv connection with token successful')
-            settings('plex_status', value='Logged in to plex.tv')
+            settings('plex_status', value=lang(39227))
             # Refresh the info from Plex.tv
             xml = self.doUtils('https://plex.tv/users/account',
                                authenticate=False,
@@ -155,7 +158,7 @@ class InitialSetup():
             verifySSL = False
         else:
             url = server['baseURL']
-            verifySSL = None
+            verifySSL = True
         chk = self.plx.CheckConnection(url,
                                        token=server['accesstoken'],
                                        verifySSL=verifySSL)
@@ -399,19 +402,30 @@ class InitialSetup():
         log.info("Initial setup called.")
         dialog = self.dialog
 
+        # Get current Kodi video cache setting
+        cache, _ = advancedsettings_xml(['cache', 'memorysize'])
+        if cache is None:
+            # Kodi default cache
+            cache = '20971520'
+        else:
+            cache = str(cache.text)
+        log.info('Current Kodi video memory cache in bytes: %s' % cache)
+        settings('kodi_video_cache', value=cache)
+
+        # Do we need to migrate stuff?
+        check_migration()
+
         # Optionally sign into plex.tv. Will not be called on very first run
         # as plexToken will be ''
-        settings('plex_status', value='Not logged in to plex.tv')
+        settings('plex_status', value=lang(39226))
         if self.plexToken and self.myplexlogin:
             self.CheckPlexTVSignIn()
 
         # If a Plex server IP has already been set
         # return only if the right machine identifier is found
-        getNewIP = False
         if self.server:
             log.info("PMS is already set: %s. Checking now..." % self.server)
-            getNewIP = not self.CheckPMS()
-            if getNewIP is False:
+            if self.CheckPMS():
                 log.info("Using PMS %s with machineIdentifier %s"
                          % (self.server, self.serverid))
                 self._write_PMS_settings(self.server, self.pms_token)
@@ -441,6 +455,7 @@ class InitialSetup():
                         yeslabel="Native (Direct Paths)"):
             log.debug("User opted to use direct paths.")
             settings('useDirectPaths', value="1")
+            state.DIRECT_PATHS = True
             # Are you on a system where you would like to replace paths
             # \\NAS\mymovie.mkv with smb://NAS/mymovie.mkv? (e.g. Windows)
             if dialog.yesno(heading=lang(29999), line1=lang(39033)):
@@ -468,18 +483,23 @@ class InitialSetup():
         if dialog.yesno(heading=lang(29999), line1=lang(39016)):
             log.debug("User opted to disable Plex music library.")
             settings('enableMusic', value="false")
-        else:
-            from utils import advancedSettingsXML
-            advancedSettingsXML()
 
         # Download additional art from FanArtTV
         if dialog.yesno(heading=lang(29999), line1=lang(39061)):
             log.debug("User opted to use FanArtTV")
             settings('FanartTV', value="true")
+        # Do you want to replace your custom user ratings with an indicator of
+        # how many versions of a media item you posses?
+        if dialog.yesno(heading=lang(29999), line1=lang(39718)):
+            log.debug("User opted to replace user ratings with version number")
+            settings('indicate_media_versions', value="true")
 
         # If you use several Plex libraries of one kind, e.g. "Kids Movies" and
         # "Parents Movies", be sure to check https://goo.gl/JFtQV9
         dialog.ok(heading=lang(29999), line1=lang(39076))
+
+        # Need to tell about our image source for collections: themoviedb.org
+        dialog.ok(heading=lang(29999), line1=lang(39717))
         # Make sure that we only ask these questions upon first installation
         settings('InstallQuestionsAnswered', value='true')
 
@@ -487,12 +507,6 @@ class InitialSetup():
             # Open Settings page now? You will need to restart!
             goToSettings = dialog.yesno(heading=lang(29999), line1=lang(39017))
         if goToSettings:
-            window('plex_serverStatus', value="Stop")
+            state.PMS_STATUS = 'Stop'
             xbmc.executebuiltin(
                 'Addon.OpenSettings(plugin.video.plexkodiconnect)')
-        else:
-            # "Kodi will now restart to apply the changes"
-            dialog.ok(heading=lang(29999), line1=lang(33033))
-            xbmc.executebuiltin('RestartApp')
-        # We should always restart to ensure e.g. Kodi settings for Music
-        # are in use!

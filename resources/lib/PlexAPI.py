@@ -39,7 +39,8 @@ import xml.etree.ElementTree as etree
 from re import compile as re_compile, sub
 from json import dumps
 from urllib import urlencode, quote_plus, unquote
-from os import path as os_path
+from os.path import basename, join
+from os import makedirs
 
 import xbmcgui
 from xbmc import sleep, executebuiltin
@@ -48,10 +49,11 @@ from xbmcvfs import exists
 import clientinfo as client
 from downloadutils import DownloadUtils
 from utils import window, settings, language as lang, tryDecode, tryEncode, \
-    DateToKodi
+    DateToKodi, exists_dir
 from PlexFunctions import PMSHttpsEnabled
 import plexdb_functions as plexdb
 import variables as v
+import state
 
 ###############################################################################
 
@@ -63,10 +65,6 @@ REGEX_TVDB = re_compile(r'''thetvdb:\/\/(.+?)\?''')
 
 
 class PlexAPI():
-    # CONSTANTS
-    # Timeout for POST/GET commands, I guess in seconds
-    timeout = 10
-
     def __init__(self):
         self.g_PMS = {}
         self.doUtils = DownloadUtils().downloadUrl
@@ -210,7 +208,7 @@ class PlexAPI():
         settings('plexHomeSize', homeSize)
         # Let Kodi log into plex.tv on startup from now on
         settings('myplexlogin', 'true')
-        settings('plex_status', value='Logged in to plex.tv')
+        settings('plex_status', value=lang(39227))
         return result
 
     def CheckPlexTvSignin(self, identifier):
@@ -259,7 +257,6 @@ class PlexAPI():
         """
         Checks connection to a Plex server, available at url. Can also be used
         to check for connection with plex.tv.
-        Will check up to 3x until reply with False
 
         Override SSL to skip the check by setting verifySSL=False
         if 'None', SSL will be checked (standard requests setting)
@@ -288,14 +285,13 @@ class PlexAPI():
             url = url + '/library/onDeck'
         log.debug("Checking connection to server %s with verifySSL=%s"
                   % (url, verifySSL))
-        # Check up to 3 times before giving up
         count = 0
         while count < 1:
             answer = self.doUtils(url,
                                   authenticate=False,
                                   headerOptions=headerOptions,
                                   verifySSL=verifySSL,
-                                  timeout=4)
+                                  timeout=10)
             if answer is None:
                 log.debug("Could not connect to %s" % url)
                 count += 1
@@ -633,7 +629,7 @@ class PlexAPI():
                            authenticate=False,
                            headerOptions={'X-Plex-Token': PMS['token']},
                            verifySSL=False,
-                           timeout=3)
+                           timeout=10)
         try:
             xml.attrib['machineIdentifier']
         except (AttributeError, KeyError):
@@ -884,6 +880,8 @@ class PlexAPI():
         settings('plex_restricteduser',
                  'true' if answer.attrib.get('restricted', '0') == '1'
                  else 'false')
+        state.RESTRICTED_USER = True if \
+            answer.attrib.get('restricted', '0') == '1' else False
 
         # Get final token to the PMS we've chosen
         url = 'https://plex.tv/api/resources?includeHttps=1'
@@ -1290,10 +1288,17 @@ class API():
         except (KeyError, ValueError):
             lastPlayedDate = None
 
-        try:
-            userrating = int(float(item['userRating']))
-        except (KeyError, ValueError):
+        if state.INDICATE_MEDIA_VERSIONS is True:
             userrating = 0
+            for entry in self.item.findall('./Media'):
+                userrating += 1
+            # Don't show a value of '1'
+            userrating = 0 if userrating == 1 else userrating
+        else:
+            try:
+                userrating = int(float(item['userRating']))
+            except (KeyError, ValueError):
+                userrating = 0
 
         try:
             rating = float(item['audienceRating'])
@@ -1907,7 +1912,8 @@ class API():
 
         If not found in item's Plex metadata, check themovidedb.org
 
-        collection=True will try to return the collection's ID
+        collection=True will try to return the three-tuple:
+            collection ID, poster-path, background-path
 
         None is returned if unsuccessful
         """
@@ -1926,7 +1932,8 @@ class API():
             log.info('Plex did not provide ID for IMDB or TVDB. Start '
                      'lookup process')
         else:
-            log.info('Start movie set/collection lookup on themoviedb')
+            log.info('Start movie set/collection lookup on themoviedb using %s'
+                     % item.get('title', ''))
 
         apiKey = settings('themoviedbAPIKey')
         if media_type == v.PLEX_TYPE_SHOW:
@@ -1935,7 +1942,7 @@ class API():
         # if the title has the year in remove it as tmdb cannot deal with it...
         # replace e.g. 'The Americans (2015)' with 'The Americans'
         title = sub(r'\s*\(\d{4}\)$', '', title, count=1)
-        url = 'http://api.themoviedb.org/3/search/%s' % media_type
+        url = 'https://api.themoviedb.org/3/search/%s' % media_type
         parameters = {
             'api_key': apiKey,
             'language': v.KODILANGUAGE,
@@ -2027,10 +2034,10 @@ class API():
         for language in [v.KODILANGUAGE, "en"]:
             parameters['language'] = language
             if media_type == "movie":
-                url = 'http://api.themoviedb.org/3/movie/%s' % tmdbId
+                url = 'https://api.themoviedb.org/3/movie/%s' % tmdbId
                 parameters['append_to_response'] = 'videos'
             elif media_type == "tv":
-                url = 'http://api.themoviedb.org/3/tv/%s' % tmdbId
+                url = 'https://api.themoviedb.org/3/tv/%s' % tmdbId
                 parameters['append_to_response'] = 'external_ids,videos'
             data = DownloadUtils().downloadUrl(
                 url,
@@ -2051,9 +2058,28 @@ class API():
                     mediaId = str(data["external_ids"].get("tvdb_id"))
                     break
             else:
-                if data.get("belongs_to_collection") is not None:
-                    mediaId = str(data.get("belongs_to_collection").get("id"))
-                    log.debug('Retrieved collections tmdb id %s' % mediaId)
+                if data.get("belongs_to_collection") is None:
+                    continue
+                mediaId = str(data.get("belongs_to_collection").get("id"))
+                log.debug('Retrieved collections tmdb id %s for %s'
+                          % (mediaId, title))
+                url = 'https://api.themoviedb.org/3/collection/%s' % mediaId
+                data = DownloadUtils().downloadUrl(
+                    url,
+                    authenticate=False,
+                    parameters=parameters,
+                    timeout=7)
+                try:
+                    data.get('poster_path')
+                except AttributeError:
+                    log.info('Could not find TheMovieDB poster paths for %s in'
+                             'the language %s' % (title, language))
+                    continue
+                else:
+                    poster = 'https://image.tmdb.org/t/p/original%s' % data.get('poster_path')
+                    background = 'https://image.tmdb.org/t/p/original%s' % data.get('backdrop_path')
+                    mediaId = mediaId, poster, background
+                    break
         return mediaId
 
     def getFanartTVArt(self, mediaId, allartworks, setInfo=False):
@@ -2143,11 +2169,13 @@ class API():
             if fanarttvimage not in data:
                 continue
             for entry in data[fanarttvimage]:
-                if fanartcount < maxfanarts:
-                    if exists(entry.get("url")):
-                        allartworks['Backdrop'].append(
-                            entry.get("url", "").replace(' ', '%20'))
-                        fanartcount += 1
+                if entry.get("url") is None:
+                    continue
+                if fanartcount > maxfanarts:
+                    break
+                allartworks['Backdrop'].append(
+                    entry['url'].replace(' ', '%20'))
+                fanartcount += 1
         return allartworks
 
     def getSetArtwork(self, parentInfo=False):
@@ -2182,7 +2210,18 @@ class API():
         # fanart tv only for movie or tv show
         externalId = self.getExternalItemId(collection=True)
         if externalId is not None:
+            try:
+                externalId, poster, background = externalId
+            except TypeError:
+                poster, background = None, None
+            if poster is not None:
+                allartworks['Primary'] = poster
+            if background is not None:
+                allartworks['Backdrop'].append(background)
             allartworks = self.getFanartTVArt(externalId, allartworks, True)
+        else:
+            log.info('Did not find a set/collection ID on TheMovieDB using %s.'
+                     ' Artwork will be missing.' % self.getTitle()[0])
         return allartworks
 
     def shouldStream(self):
@@ -2214,7 +2253,7 @@ class API():
                 # Get additional info (filename / languages)
                 filename = None
                 if 'file' in entry[0].attrib:
-                    filename = os_path.basename(entry[0].attrib['file'])
+                    filename = basename(entry[0].attrib['file'])
                 # Languages of audio streams
                 languages = []
                 for stream in entry[0]:
@@ -2288,37 +2327,37 @@ class API():
             return url
 
         # For Transcoding
+        headers = {
+            'X-Plex-Platform': 'Android',
+            'X-Plex-Platform-Version': '7.0',
+            'X-Plex-Product': 'Plex for Android',
+            'X-Plex-Version': '5.8.0.475'
+        }
         # Path/key to VIDEO item of xml PMS response is needed, not part
         path = self.item.attrib['key']
         transcodePath = self.server + \
             '/video/:/transcode/universal/start.m3u8?'
         args = {
+            'audioBoost': settings('audioBoost'),
+            'autoAdjustQuality': 0,
+            'directPlay': 0,
+            'directStream': 1,
             'protocol': 'hls',   # seen in the wild: 'dash', 'http', 'hls'
             'session':  window('plex_client_Id'),
             'fastSeek': 1,
             'path': path,
             'mediaIndex': self.mediastream,
             'partIndex': self.part,
+            'hasMDE': 1,
+            'location': 'lan',
+            'subtitleSize': settings('subtitleSize')
             # 'copyts': 1,
             # 'offset': 0,           # Resume point
         }
-        # Seem like PHT to let the PMS use the transcoding profile
-        xargs['X-Plex-Device'] = 'Plex Home Theater'
-        # Currently not used!
-        if action == "DirectStream":
-            argsUpdate = {
-                'directPlay': '0',
-                'directStream': '1',
-            }
-            args.update(argsUpdate)
-        elif action == 'Transcode':
-            argsUpdate = {
-                'directPlay': '0',
-                'directStream': '0'
-            }
-            log.debug("Setting transcode quality to: %s" % quality)
-            args.update(quality)
-            args.update(argsUpdate)
+        # Look like Android to let the PMS use the transcoding profile
+        xargs.update(headers)
+        log.debug("Setting transcode quality to: %s" % quality)
+        args.update(quality)
         url = transcodePath + urlencode(xargs) + '&' + urlencode(args)
         return url
 
@@ -2330,24 +2369,61 @@ class API():
         except (TypeError, KeyError, IndexError):
             return
         kodiindex = 0
+        fileindex = 0
         for stream in mediastreams:
-            index = stream.attrib['id']
             # Since plex returns all possible tracks together, have to pull
-            # only external subtitles.
+            # only external subtitles - only for these a 'key' exists
+            if stream.attrib.get('streamType') != "3":
+                # Not a subtitle
+                continue
+            # Only set for additional external subtitles NOT lying beside video
             key = stream.attrib.get('key')
-            # IsTextSubtitleStream if true, is available to download from plex.
-            if stream.attrib.get('streamType') == "3" and key:
-                # Direct stream
-                url = ("%s%s" % (self.server, key))
-                url = self.addPlexCredentialsToUrl(url)
+            # Only set for dedicated subtitle files lying beside video
+            # ext = stream.attrib.get('format')
+            if key:
+                # We do know the language - temporarily download
+                if stream.attrib.get('languageCode') is not None:
+                    path = self.download_external_subtitles(
+                        "{server}%s" % key,
+                        "subtitle%02d.%s.%s" % (fileindex,
+                                                stream.attrib['languageCode'],
+                                                stream.attrib['codec']))
+                    fileindex += 1
+                # We don't know the language - no need to download
+                else:
+                    path = self.addPlexCredentialsToUrl(
+                        "%s%s" % (self.server, key))
                 # map external subtitles for mapping
-                mapping[kodiindex] = index
-                externalsubs.append(url)
+                mapping[kodiindex] = stream.attrib['id']
+                externalsubs.append(path)
                 kodiindex += 1
         mapping = dumps(mapping)
         window('plex_%s.indexMapping' % playurl, value=mapping)
         log.info('Found external subs: %s' % externalsubs)
         return externalsubs
+
+    @staticmethod
+    def download_external_subtitles(url, filename):
+        """
+        One cannot pass the subtitle language for ListItems. Workaround; will
+        download the subtitle at url to the Kodi PKC directory in a temp dir
+
+        Returns the path to the downloaded subtitle or None
+        """
+        if not exists_dir(v.EXTERNAL_SUBTITLE_TEMP_PATH):
+            makedirs(v.EXTERNAL_SUBTITLE_TEMP_PATH)
+        path = join(v.EXTERNAL_SUBTITLE_TEMP_PATH, filename)
+        r = DownloadUtils().downloadUrl(url, return_response=True)
+        try:
+            r.status_code
+        except AttributeError:
+            log.error('Could not temporarily download subtitle %s' % url)
+            return
+        else:
+            r.encoding = 'utf-8'
+            with open(path, 'wb') as f:
+                f.write(r.content)
+            return path
 
     def GetKodiPremierDate(self):
         """
@@ -2502,7 +2578,8 @@ class API():
             listItem.addStreamInfo(
                 "video", {'duration': self.getRuntime()[1]})
 
-    def validatePlayurl(self, path, typus, forceCheck=False, folder=False):
+    def validatePlayurl(self, path, typus, forceCheck=False, folder=False,
+                        omitCheck=False):
         """
         Returns a valid path for Kodi, e.g. with '\' substituted to '\\' in
         Unicode. Returns None if this is not possible
@@ -2512,6 +2589,7 @@ class API():
             forceCheck : Will always try to check validity of path
                          Will also skip confirmation dialog if path not found
             folder     : Set to True if path is a folder
+            omitCheck  : Will entirely omit validity check if True
         """
         if path is None:
             return None
@@ -2525,26 +2603,33 @@ class API():
         elif window('replaceSMB') == 'true':
             if path.startswith('\\\\'):
                 path = 'smb:' + path.replace('\\', '/')
-        if window('plex_pathverified') == 'true' and forceCheck is False:
+        if ((window('plex_pathverified') == 'true' and forceCheck is False) or
+                omitCheck is True):
             return path
 
         # exist() needs a / or \ at the end to work for directories
         if folder is False:
             # files
-            check = exists(tryEncode(path)) == 1
+            check = exists(tryEncode(path))
         else:
             # directories
             if "\\" in path:
-                # Add the missing backslash
-                check = exists(tryEncode(path + "\\")) == 1
+                if not path.endswith('\\'):
+                    # Add the missing backslash
+                    check = exists_dir(path + "\\")
+                else:
+                    check = exists_dir(path)
             else:
-                check = exists(tryEncode(path + "/")) == 1
+                if not path.endswith('/'):
+                    check = exists_dir(path + "/")
+                else:
+                    check = exists_dir(path)
 
-        if check is False:
+        if not check:
             if forceCheck is False:
                 # Validate the path is correct with user intervention
                 if self.askToValidate(path):
-                    window('plex_shouldStop', value="true")
+                    state.STOP_SYNC = True
                     path = None
                 window('plex_pathverified', value='true')
             else:
@@ -2631,6 +2716,7 @@ class API():
 
         # Append external subtitles to stream
         playmethod = window('%s.playmethod' % plexitem)
+        # Direct play automatically appends external
+        # BUT: Plex may add additional subtitles NOT lying right next to video
         if playmethod in ("DirectStream", "DirectPlay"):
-            subtitles = self.externalSubs(playurl)
-            listitem.setSubtitles(subtitles)
+            listitem.setSubtitles(self.externalSubs(playurl))

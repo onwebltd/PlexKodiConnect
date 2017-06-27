@@ -851,7 +851,6 @@ class Kodidb_Functions():
         if len(result) == 0:
             log.info('Did not find matching paths, abort')
             return
-        log.debug('Result: %s' % result)
         # Kodi seems to make ONE temporary entry; we only want the earlier,
         # permanent one
         if len(result) > 2:
@@ -859,7 +858,6 @@ class Kodidb_Functions():
                      ' paths, aborting')
             return
         idFile = result[0]
-        log.debug('idFile: %s' % idFile)
 
         # Try movies first
         query = ' '.join((
@@ -1411,9 +1409,8 @@ class Kodidb_Functions():
             ID = 'idEpisode'
         elif kodi_type == v.KODI_TYPE_SONG:
             ID = 'idSong'
-        query = ('''UPDATE %s SET userrating = ? WHERE %s = ?'''
-                 % (kodi_type, ID))
-        self.cursor.execute(query, (userrating, kodi_id))
+        query = '''UPDATE %s SET userrating = ? WHERE ? = ?''' % kodi_type
+        self.cursor.execute(query, (userrating, ID, kodi_id))
 
     def create_entry_uniqueid(self):
         self.cursor.execute(

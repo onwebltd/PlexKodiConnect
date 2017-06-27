@@ -123,9 +123,7 @@ class Main():
         elif mode in ('manualsync', 'repair'):
             if window('plex_online') != 'true':
                 # Server is not online, do not run the sync
-                dialog('ok',
-                       heading=lang(29999),
-                       message=lang(39205))
+                dialog('ok', lang(29999), lang(39205))
                 log.error('Not connected to a PMS.')
             else:
                 if mode == 'repair':
@@ -172,10 +170,10 @@ class Main():
         Start up playback_starter in main Python thread
         """
         # Put the request into the 'queue'
-        while window('plex_play_new_item'):
+        while window('plex_command'):
             sleep(50)
-        window('plex_play_new_item',
-               value='%s%s' % ('play', argv[2]))
+        window('plex_command',
+               value='play_%s' % argv[2])
         # Wait for the result
         while not pickl_window('plex_result'):
             sleep(50)

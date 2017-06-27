@@ -9,6 +9,8 @@ import xml.etree.ElementTree as etree
 from utils import settings, window, language as lang, dialog
 import clientinfo as client
 
+import state
+
 ###############################################################################
 
 # Disable annoying requests warnings
@@ -34,25 +36,11 @@ class DownloadUtils():
     connectionAttempts = 2
     # How many 401 returns before declaring unauthorized?
     unauthorizedAttempts = 2
+    # How long should we wait for an answer from the
+    timeout = 30.0
 
     def __init__(self):
         self.__dict__ = self._shared_state
-        # Requests session
-        self.timeout = 30.0
-
-    def setUsername(self, username):
-        """
-        Reserved for userclient only
-        """
-        self.username = username
-        log.debug("Set username: %s" % username)
-
-    def setUserId(self, userId):
-        """
-        Reserved for userclient only
-        """
-        self.userId = userId
-        log.debug("Set userId: %s" % userId)
 
     def setServer(self, server):
         """
@@ -108,8 +96,6 @@ class DownloadUtils():
         # Set other stuff
         self.setServer(window('pms_server'))
         self.setToken(window('pms_token'))
-        self.setUserId(window('currUserId'))
-        self.setUsername(window('plex_username'))
 
         # Counters to declare PMS dead or unauthorized
         # Use window variables because start of movies will be called with a
@@ -156,7 +142,7 @@ class DownloadUtils():
 
     def downloadUrl(self, url, action_type="GET", postBody=None,
                     parameters=None, authenticate=True, headerOptions=None,
-                    verifySSL=True, timeout=None):
+                    verifySSL=True, timeout=None, return_response=False):
         """
         Override SSL check with verifySSL=False
 
@@ -169,7 +155,8 @@ class DownloadUtils():
             401, ...           integer if PMS answered with HTTP error 401
                                (unauthorized) or other http error codes
             xml                xml etree root object, if applicable
-            JSON               json() object, if applicable
+            json               json() object, if applicable
+            <response-object>  if return_response=True is set (200, 201 only)
         """
         kwargs = {'timeout': self.timeout}
         if authenticate is True:
@@ -273,10 +260,11 @@ class DownloadUtils():
                             self.unauthorizedAttempts):
                         log.warn('We seem to be truly unauthorized for PMS'
                                  ' %s ' % url)
-                        if window('plex_serverStatus') not in ('401', 'Auth'):
+                        if state.PMS_STATUS not in ('401', 'Auth'):
                             # Tell userclient token has been revoked.
                             log.debug('Setting PMS server status to '
                                       'unauthorized')
+                            state.PMS_STATUS = '401'
                             window('plex_serverStatus', value="401")
                             dialog('notification',
                                    lang(29999),
@@ -290,6 +278,9 @@ class DownloadUtils():
             elif r.status_code in (200, 201):
                 # 200: OK
                 # 201: Created
+                if return_response is True:
+                    # return the entire response object
+                    return r
                 try:
                     # xml response
                     r = etree.fromstring(r.content)

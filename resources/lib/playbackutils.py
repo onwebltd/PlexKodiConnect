@@ -22,6 +22,7 @@ from playlist_func import add_item_to_kodi_playlist, \
 from pickler import Playback_Successful
 from plexdb_functions import Get_Plex_DB
 import variables as v
+import state
 
 ###############################################################################
 
@@ -75,10 +76,7 @@ class PlaybackUtils():
 
             playmethod = window('plex_%s.playmethod' % playurl)
             if playmethod == "Transcode":
-                window('plex_%s.playmethod' % playurl, clear=True)
-                playurl = tryEncode(playutils.audioSubsPref(
-                    listitem, tryDecode(playurl)))
-                window('plex_%s.playmethod' % playurl, "Transcode")
+                playutils.audioSubsPref(listitem, tryDecode(playurl))
             listitem.setPath(playurl)
             api.set_playback_win_props(playurl, listitem)
             result.listitem = listitem
@@ -190,17 +188,12 @@ class PlaybackUtils():
                     kodi_type)
 
             elif contextmenu_play:
-                if window('useDirectPaths') == 'true':
+                if state.DIRECT_PATHS:
                     # Cannot add via JSON with full metadata because then we
                     # Would be using the direct path
                     log.debug("Adding contextmenu item for direct paths")
                     if window('plex_%s.playmethod' % playurl) == "Transcode":
-                        window('plex_%s.playmethod' % playurl,
-                               clear=True)
-                        playurl = tryEncode(playutils.audioSubsPref(
-                            listitem, tryDecode(playurl)))
-                        window('plex_%s.playmethod' % playurl,
-                               value="Transcode")
+                        playutils.audioSubsPref(listitem, tryDecode(playurl))
                     api.CreateListItemFromPlexItem(listitem)
                     api.set_playback_win_props(playurl, listitem)
                     api.set_listitem_artwork(listitem)
@@ -208,7 +201,7 @@ class PlaybackUtils():
                         playqueue,
                         self.currentPosition+1,
                         convert_PKC_to_listitem(listitem),
-                        playurl,
+                        file=playurl,
                         kodi_item={'id': kodi_id, 'type': kodi_type})
                 else:
                     # Full metadata$
@@ -246,10 +239,7 @@ class PlaybackUtils():
         # For transcoding only, ask for audio/subs pref
         if (window('plex_%s.playmethod' % playurl) == "Transcode" and
                 not contextmenu_play):
-            window('plex_%s.playmethod' % playurl, clear=True)
-            playurl = tryEncode(playutils.audioSubsPref(
-                listitem, tryDecode(playurl)))
-            window('plex_%s.playmethod' % playurl, value="Transcode")
+            playutils.audioSubsPref(listitem, tryDecode(playurl))
 
         listitem.setPath(playurl)
         api.set_playback_win_props(playurl, listitem)

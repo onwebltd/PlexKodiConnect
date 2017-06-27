@@ -4,16 +4,16 @@
 import logging
 from json import dumps, loads
 import requests
-from os import path as os_path
+from shutil import rmtree
 from urllib import quote_plus, unquote
 from threading import Thread
 from Queue import Queue, Empty
 
 from xbmc import executeJSONRPC, sleep, translatePath
-from xbmcvfs import listdir, delete
+from xbmcvfs import exists
 
 from utils import window, settings, language as lang, kodiSQL, tryEncode, \
-    tryDecode, IfExists, ThreadMethods, ThreadMethodsAdditionalStop, dialog
+    thread_methods, dialog, exists_dir, tryDecode
 
 # Disable annoying requests warnings
 import requests.packages.urllib3
@@ -126,8 +126,8 @@ def double_urldecode(text):
     return unquote(unquote(text))
 
 
-@ThreadMethodsAdditionalStop('plex_shouldStop')
-@ThreadMethods
+@thread_methods(add_stops=['STOP_SYNC'],
+                add_suspends=['SUSPEND_LIBRARY_THREAD', 'DB_SCAN'])
 class Image_Cache_Thread(Thread):
     xbmc_host = 'localhost'
     xbmc_port, xbmc_username, xbmc_password = setKodiWebServerDetails()
@@ -140,22 +140,16 @@ class Image_Cache_Thread(Thread):
         self.queue = ARTWORK_QUEUE
         Thread.__init__(self)
 
-    def threadSuspended(self):
-        # Overwrite method to add TWO additional suspends
-        return (self._threadSuspended or
-                window('suspend_LibraryThread') or
-                window('plex_dbScan'))
-
     def run(self):
-        threadStopped = self.threadStopped
-        threadSuspended = self.threadSuspended
+        thread_stopped = self.thread_stopped
+        thread_suspended = self.thread_suspended
         queue = self.queue
         sleep_between = self.sleep_between
-        while not threadStopped():
+        while not thread_stopped():
             # In the event the server goes offline
-            while threadSuspended():
+            while thread_suspended():
                 # Set in service.py
-                if threadStopped():
+                if thread_stopped():
                     # Abort was requested while waiting. We should exit
                     log.info("---===### Stopped Image_Cache_Thread ###===---")
                     return
@@ -178,7 +172,7 @@ class Image_Cache_Thread(Thread):
                     # download. All is well
                     break
                 except requests.ConnectionError:
-                    if threadStopped():
+                    if thread_stopped():
                         # Kodi terminated
                         break
                     # Server thinks its a DOS attack, ('error 10053')
@@ -229,29 +223,19 @@ class Artwork():
             log.info("Resetting all cache data first")
             # Remove all existing textures first
             path = tryDecode(translatePath("special://thumbnails/"))
-            if IfExists(path):
-                allDirs, allFiles = listdir(path)
-                for dir in allDirs:
-                    allDirs, allFiles = listdir(path+dir)
-                    for file in allFiles:
-                        if os_path.supports_unicode_filenames:
-                            delete(os_path.join(
-                                path + tryDecode(dir),
-                                tryDecode(file)))
-                        else:
-                            delete(os_path.join(
-                                tryEncode(path) + dir,
-                                file))
+            if exists_dir(path):
+                rmtree(path, ignore_errors=True)
 
             # remove all existing data from texture DB
             connection = kodiSQL('texture')
             cursor = connection.cursor()
-            cursor.execute('SELECT tbl_name FROM sqlite_master WHERE type="table"')
+            query = 'SELECT tbl_name FROM sqlite_master WHERE type=?'
+            cursor.execute(query, ('table', ))
             rows = cursor.fetchall()
             for row in rows:
                 tableName = row[0]
                 if tableName != "version":
-                    cursor.execute("DELETE FROM " + tableName)
+                    cursor.execute("DELETE FROM %s" % tableName)
             connection.commit()
             connection.close()
 
@@ -259,7 +243,8 @@ class Artwork():
         connection = kodiSQL('video')
         cursor = connection.cursor()
         # dont include actors
-        cursor.execute("SELECT url FROM art WHERE media_type != 'actor'")
+        query = "SELECT url FROM art WHERE media_type != ?"
+        cursor.execute(query, ('actor', ))
         result = cursor.fetchall()
         total = len(result)
         log.info("Image cache sync about to process %s video images" % total)
@@ -286,7 +271,6 @@ class Artwork():
     def addArtwork(self, artwork, kodiId, mediaType, cursor):
         # Kodi conversion table
         kodiart = {
-
             'Primary': ["thumb", "poster"],
             'Banner': "banner",
             'Logo': "clearlogo",
@@ -307,7 +291,6 @@ class Artwork():
                 backdropsNumber = len(backdrops)
 
                 query = ' '.join((
-
                     "SELECT url",
                     "FROM art",
                     "WHERE media_id = ?",
@@ -320,7 +303,6 @@ class Artwork():
                 if len(rows) > backdropsNumber:
                     # More backdrops in database. Delete extra fanart.
                     query = ' '.join((
-
                         "DELETE FROM art",
                         "WHERE media_id = ?",
                         "AND media_type = ?",
@@ -339,7 +321,7 @@ class Artwork():
                         cursor=cursor)
 
                     if backdropsNumber > 1:
-                        try: # Will only fail on the first try, str to int.
+                        try:  # Will only fail on the first try, str to int.
                             index += 1
                         except TypeError:
                             index = 1
@@ -438,14 +420,10 @@ class Artwork():
             log.info("Could not find cached url.")
         else:
             # Delete thumbnail as well as the entry
-            thumbnails = tryDecode(
-                translatePath("special://thumbnails/%s" % cachedurl))
-            log.debug("Deleting cached thumbnail: %s" % thumbnails)
-            try:
-                delete(thumbnails)
-            except Exception as e:
-                log.error('Could not delete cached artwork %s. Error: %s'
-                          % (thumbnails, e))
+            path = translatePath("special://thumbnails/%s" % cachedurl)
+            log.debug("Deleting cached thumbnail: %s" % path)
+            if exists(path):
+                rmtree(tryDecode(path), ignore_errors=True)
             cursor.execute("DELETE FROM texture WHERE url = ?", (url,))
             connection.commit()
         finally:

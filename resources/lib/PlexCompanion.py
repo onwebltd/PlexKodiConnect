@@ -7,13 +7,15 @@ from urllib import urlencode
 
 from xbmc import sleep, executebuiltin
 
-from utils import settings, ThreadMethodsAdditionalSuspend, ThreadMethods
+from utils import settings, thread_methods
 from plexbmchelper import listener, plexgdm, subscribers, functions, \
     httppersist, plexsettings
 from PlexFunctions import ParseContainerKey, GetPlexMetadata
 from PlexAPI import API
+from playlist_func import get_pms_playqueue, get_plextype_from_xml
 import player
 import variables as v
+import state
 
 ###############################################################################
 
@@ -22,8 +24,7 @@ log = logging.getLogger("PLEX."+__name__)
 ###############################################################################
 
 
-@ThreadMethodsAdditionalSuspend('plex_serverStatus')
-@ThreadMethods
+@thread_methods(add_suspends=['PMS_STATUS'])
 class PlexCompanion(Thread):
     """
     """
@@ -77,6 +78,8 @@ class PlexCompanion(Thread):
         log.debug('Processing: %s' % task)
         data = task['data']
 
+        # Get the token of the user flinging media (might be different one)
+        token = data.get('token')
         if task['action'] == 'alexa':
             # e.g. Alexa
             xml = GetPlexMetadata(data['key'])
@@ -88,9 +91,11 @@ class PlexCompanion(Thread):
             api = API(xml[0])
             if api.getType() == v.PLEX_TYPE_ALBUM:
                 log.debug('Plex music album detected')
-                self.mgr.playqueue.init_playqueue_from_plex_children(
+                queue = self.mgr.playqueue.init_playqueue_from_plex_children(
                     api.getRatingKey())
+                queue.plex_transient_token = token
             else:
+                state.PLEX_TRANSIENT_TOKEN = token
                 params = {
                     'mode': 'plex_node',
                     'key': '{server}%s' % data.get('key'),
@@ -104,6 +109,7 @@ class PlexCompanion(Thread):
         elif (task['action'] == 'playlist' and
                 data.get('address') == 'node.plexapp.com'):
             # E.g. watch later initiated by Companion
+            state.PLEX_TRANSIENT_TOKEN = token
             params = {
                 'mode': 'plex_node',
                 'key': '{server}%s' % data.get('key'),
@@ -142,13 +148,51 @@ class PlexCompanion(Thread):
                 ID,
                 repeat=query.get('repeat'),
                 offset=data.get('offset'))
+            playqueue.plex_transient_token = token
+
+        elif task['action'] == 'refreshPlayQueue':
+            # example data: {'playQueueID': '8475', 'commandID': '11'}
+            xml = get_pms_playqueue(data['playQueueID'])
+            if xml is None:
+                return
+            if len(xml) == 0:
+                log.debug('Empty playqueue received - clearing playqueue')
+                plex_type = get_plextype_from_xml(xml)
+                if plex_type is None:
+                    return
+                playqueue = self.mgr.playqueue.get_playqueue_from_type(
+                    v.KODI_PLAYLIST_TYPE_FROM_PLEX_TYPE[plex_type])
+                playqueue.clear()
+                return
+            playqueue = self.mgr.playqueue.get_playqueue_from_type(
+                v.KODI_PLAYLIST_TYPE_FROM_PLEX_TYPE[xml[0].attrib['type']])
+            self.mgr.playqueue.update_playqueue_from_PMS(
+                playqueue,
+                data['playQueueID'])
 
     def run(self):
-        httpd = False
+        # Ensure that sockets will be closed no matter what
+        try:
+            self.__run()
+        finally:
+            try:
+                self.httpd.socket.shutdown(SHUT_RDWR)
+            except AttributeError:
+                pass
+            finally:
+                try:
+                    self.httpd.socket.close()
+                except AttributeError:
+                    pass
+        log.info("----===## Plex Companion stopped ##===----")
+
+    def __run(self):
+        self.httpd = False
+        httpd = self.httpd
         # Cache for quicker while loops
         client = self.client
-        threadStopped = self.threadStopped
-        threadSuspended = self.threadSuspended
+        thread_stopped = self.thread_stopped
+        thread_suspended = self.thread_suspended
 
         # Start up instances
         requestMgr = httppersist.RequestMgr()
@@ -196,12 +240,12 @@ class PlexCompanion(Thread):
         if httpd:
             t = Thread(target=httpd.handle_request)
 
-        while not threadStopped():
+        while not thread_stopped():
             # If we are not authorized, sleep
             # Otherwise, we trigger a download which leads to a
             # re-authorizations
-            while threadSuspended():
-                if threadStopped():
+            while thread_suspended():
+                if thread_stopped():
                     break
                 sleep(1000)
             try:
@@ -245,11 +289,3 @@ class PlexCompanion(Thread):
             sleep(50)
 
         client.stop_all()
-        if httpd:
-            try:
-                httpd.socket.shutdown(SHUT_RDWR)
-            except:
-                pass
-            finally:
-                httpd.socket.close()
-        log.info("----===## Plex Companion stopped ##===----")

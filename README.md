@@ -1,5 +1,5 @@
-[![stable version](https://img.shields.io/badge/stable_version-1.7.7-blue.svg?maxAge=60&style=flat) ](https://dl.bintray.com/croneter/PlexKodiConnect/bin/repository.plexkodiconnect/repository.plexkodiconnect-1.0.0.zip) 
-[![beta version](https://img.shields.io/badge/beta_version-1.7.7-red.svg?maxAge=60&style=flat) ](https://dl.bintray.com/croneter/PlexKodiConnect_BETA/bin-BETA/repository.plexkodiconnectbeta/repository.plexkodiconnectbeta-1.0.0.zip)
+[![stable version](https://img.shields.io/badge/stable_version-1.8.3-blue.svg?maxAge=60&style=flat) ](https://dl.bintray.com/croneter/PlexKodiConnect/bin/repository.plexkodiconnect/repository.plexkodiconnect-1.0.0.zip) 
+[![beta version](https://img.shields.io/badge/beta_version-1.8.3-red.svg?maxAge=60&style=flat) ](https://dl.bintray.com/croneter/PlexKodiConnect_BETA/bin-BETA/repository.plexkodiconnectbeta/repository.plexkodiconnectbeta-1.0.0.zip)
 
 [![Installation](https://img.shields.io/badge/wiki-installation-brightgreen.svg?maxAge=60&style=flat)](https://github.com/croneter/PlexKodiConnect/wiki/Installation)
 [![FAQ](https://img.shields.io/badge/wiki-FAQ-brightgreen.svg?maxAge=60&style=flat)](https://github.com/croneter/PlexKodiConnect/wiki/faq)
@@ -17,7 +17,7 @@ Have a look at [some screenshots](https://github.com/croneter/PlexKodiConnect/wi
 
 ### Please Help Translating
 
-Please help translate PlexKodiConnect into your language: [Transifex.com](https://www.transifex.com/croneter/plexkodiconnect)
+Please help translate PlexKodiConnect into your language: [Transifex.com](https://www.transifex.com/croneter/pkc)
 
 
 ### Content
@@ -25,6 +25,7 @@ Please help translate PlexKodiConnect into your language: [Transifex.com](https:
 * [**What does PKC do?**](#what-does-pkc-do)
 * [**PKC Features**](#pkc-features)
 * [**Download and Installation**](#download-and-installation)
+* [**Additional Artwork**](#additional-artwork)
 * [**Important notes**](#important-notes)
 * [**Donations**](#donations)
 * [**Request a New Feature**](#request-a-new-feature)
@@ -59,13 +60,14 @@ PKC synchronizes your media from your Plex server to the native Kodi database. H
     + English
     + German
     + Czech, thanks @Pavuucek
-    + Spanish, thanks @bartolomesoriano
+    + Spanish, thanks @bartolomesoriano, @danichispa 
     + Danish, thanks @FIGHT
     + Italian, thanks @nikkux, @chicco83
     + Dutch, thanks @mvanbaak
+    + French, thanks @lflforce, @ahivert, @Nox71, @CotzaDev, @vinch100, @Polymorph31, @jbnitro
     + Chinese Traditional, thanks @old2tan
     + Chinese Simplified, thanks @everdream
-    + [Please help translating](https://www.transifex.com/croneter/plexkodiconnect)
+    + [Please help translating](https://www.transifex.com/croneter/pkc)
 
 ### Download and Installation
 
@@ -75,13 +77,17 @@ Install PKC via the PlexKodiConnect Kodi repository below (we cannot use the off
 |----------------|--------------|
 | [![stable version](https://img.shields.io/badge/stable_version-latest-blue.svg?maxAge=60&style=flat) ](https://dl.bintray.com/croneter/PlexKodiConnect/bin/repository.plexkodiconnect/repository.plexkodiconnect-1.0.0.zip)  | [![beta version](https://img.shields.io/badge/beta_version-latest-red.svg?maxAge=60&style=flat) ](https://dl.bintray.com/croneter/PlexKodiConnect_BETA/bin-BETA/repository.plexkodiconnectbeta/repository.plexkodiconnectbeta-1.0.0.zip) |
 
+### Additional Artwork
+PKC uses additional artwork for free from [TheMovieDB](https://www.themoviedb.org). Many thanks for lettings us use the API, guys!
+[![Logo of TheMovieDB](themoviedb.png)](https://www.themoviedb.org)
+
 ### Important Notes
 
 1. If you are using a **low CPU device like a Raspberry Pi or a CuBox**, PKC might be instable or crash during initial sync. Lower the number of threads in the [PKC settings under Sync Options](https://github.com/croneter/PlexKodiConnect/wiki/PKC-settings#sync-options). Don't forget to reboot Kodi after that.
 2. **Compatibility**: 
     * PKC is currently not compatible with Kodi's Video Extras plugin. **Deactivate Video Extras** if trailers/movies start randomly playing. 
     * PKC is not (and will never be) compatible with the **MySQL database replacement** in Kodi. In fact, PKC replaces the MySQL functionality because it acts as a "man in the middle" for your entire media library.
-    * If **another plugin is not working** like it's supposed to, try to use [PKC direct paths](https://github.com/croneter/PlexKodiConnect/wiki/Direct-Paths)
+    * If **another plugin is not working** like it's supposed to, try to use [PKC direct paths](https://github.com/croneter/PlexKodiConnect/wiki/Direct-Paths-Explained)
 
 ### Donations
 I'm not in any way affiliated with Plex. Thank you very much for a small donation via ko-fi.com and PayPal if you appreciate PKC.  
@@ -98,8 +104,6 @@ I'm not in any way affiliated with Plex. Thank you very much for a small donatio
 Solutions are unlikely due to the nature of these issues
 - A Plex Media Server "bug" leads to frequent and slow syncs, see [here for more info](https://github.com/croneter/PlexKodiConnect/issues/135)
 - *Plex Music when using Addon paths instead of Native Direct Paths:* Kodi tries to scan every(!) single Plex song on startup. This leads to errors in the Kodi log file and potentially even crashes. See the [Github issue](https://github.com/croneter/PlexKodiConnect/issues/14) for more details
-- *Plex Music when using Addon paths instead of Native Direct Paths:* You must have a static IP address for your Plex media server if you plan to use Plex Music features
-- External Plex subtitles (in separate files, e.g. mymovie.srt) can be used, but it is impossible to label them correctly and tell what language they are in. However, this is not the case if you use direct paths
 
 *Background Sync:*
 The Plex Server does not tell anyone of the following changes. Hence PKC cannot detect these changes instantly but will notice them only on full/delta syncs (standard settings is every 60 minutes)

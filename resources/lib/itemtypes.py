@@ -16,6 +16,7 @@ import kodidb_functions as kodidb
 import PlexAPI
 from PlexFunctions import GetPlexMetadata
 import variables as v
+import state
 
 ###############################################################################
 
@@ -35,10 +36,7 @@ class Items(object):
     """
 
     def __init__(self):
-        self.directpath = window('useDirectPaths') == 'true'
-
         self.artwork = artwork.Artwork()
-        self.userid = window('currUserId')
         self.server = window('pms_server')
 
     def __enter__(self):
@@ -165,7 +163,7 @@ class Items(object):
                      'Mark item played at %s percent.'
                      % (item['ratingKey'], str(complete), MARK_PLAYED_AT), 1)
             if complete >= MARK_PLAYED_AT:
-                log.info('Marking as completely watched in Kodi', 1)
+                log.info('Marking as completely watched in Kodi')
                 sleep(500)
                 try:
                     item['viewCount'] += 1
@@ -268,8 +266,8 @@ class Movies(Items):
                 break
 
         # GET THE FILE AND PATH #####
-        doIndirect = not self.directpath
-        if self.directpath:
+        doIndirect = not state.DIRECT_PATHS
+        if state.DIRECT_PATHS:
             # Direct paths is set the Kodi way
             playurl = API.getFilePath(forceFirstMediaStream=True)
             if playurl is None:
@@ -324,13 +322,16 @@ class Movies(Items):
                                             votecount,
                                             rating_id)
                 # update new uniqueid Kodi 17
-                uniqueid = self.kodi_db.get_uniqueid(movieid,
-                                                     v.KODI_TYPE_MOVIE)
-                self.kodi_db.update_uniqueid(movieid,
-                                             v.KODI_TYPE_MOVIE,
-                                             imdb,
-                                             "imdb",
-                                             uniqueid)
+                if imdb is not None:
+                    uniqueid = self.kodi_db.get_uniqueid(movieid,
+                                                         v.KODI_TYPE_MOVIE)
+                    self.kodi_db.update_uniqueid(movieid,
+                                                 v.KODI_TYPE_MOVIE,
+                                                 imdb,
+                                                 "imdb",
+                                                 uniqueid)
+                else:
+                    uniqueid = -1
                 query = '''
                     UPDATE movie
                     SET c00 = ?, c01 = ?, c02 = ?, c03 = ?, c04 = ?, c05 = ?,
@@ -341,7 +342,7 @@ class Movies(Items):
                     WHERE idMovie = ?
                 '''
                 kodicursor.execute(query, (title, plot, shortplot, tagline,
-                    votecount, rating_id, writer, year, imdb, sorttitle,
+                    votecount, rating_id, writer, year, uniqueid, sorttitle,
                     runtime, mpaa, genre, director, title, studio, trailer,
                     country, playurl, pathid, fileid, year,
                     userdata['UserRating'], movieid))
@@ -373,11 +374,15 @@ class Movies(Items):
                                          rating,
                                          votecount)
                 # add new uniqueid Kodi 17
-                self.kodi_db.add_uniqueid(self.kodi_db.create_entry_uniqueid(),
-                                          movieid,
-                                          v.KODI_TYPE_MOVIE,
-                                          imdb,
-                                          "imdb")
+                if imdb is not None:
+                    uniqueid = self.kodi_db.create_entry_uniqueid()
+                    self.kodi_db.add_uniqueid(uniqueid,
+                                              movieid,
+                                              v.KODI_TYPE_MOVIE,
+                                              imdb,
+                                              "imdb")
+                else:
+                    uniqueid = -1
                 query = '''
                     INSERT INTO movie(idMovie, idFile, c00, c01, c02, c03,
                         c04, c05, c06, c07, c09, c10, c11, c12, c14, c15, c16,
@@ -387,8 +392,8 @@ class Movies(Items):
                 '''
                 kodicursor.execute(query, (movieid, fileid, title, plot,
                     shortplot, tagline, votecount, rating_id, writer, year,
-                    imdb, sorttitle, runtime, mpaa, genre, director, title,
-                    studio, trailer, country, playurl, pathid, year,
+                    uniqueid, sorttitle, runtime, mpaa, genre, director,
+                    title, studio, trailer, country, playurl, pathid, year,
                     userdata['UserRating']))
             else:
                 query = '''
@@ -563,8 +568,8 @@ class TVShows(Items):
             studio = None
 
         # GET THE FILE AND PATH #####
-        doIndirect = not self.directpath
-        if self.directpath:
+        doIndirect = not state.DIRECT_PATHS
+        if state.DIRECT_PATHS:
             # Direct paths is set the Kodi way
             playurl = API.getTVShowPath()
             if playurl is None:
@@ -617,12 +622,16 @@ class TVShows(Items):
                                             votecount,
                                             rating_id)
                 # update new uniqueid Kodi 17
-                uniqueid = self.kodi_db.get_uniqueid(showid, v.KODI_TYPE_SHOW)
-                self.kodi_db.update_uniqueid(showid,
-                                             v.KODI_TYPE_SHOW,
-                                             tvdb,
-                                             "tvdb",
-                                             uniqueid)
+                if tvdb is not None:
+                    uniqueid = self.kodi_db.get_uniqueid(showid,
+                                                         v.KODI_TYPE_SHOW)
+                    self.kodi_db.update_uniqueid(showid,
+                                                 v.KODI_TYPE_SHOW,
+                                                 tvdb,
+                                                 "unknown",
+                                                 uniqueid)
+                else:
+                    uniqueid = -1
                 # Update the tvshow entry
                 query = '''
                     UPDATE tvshow
@@ -631,8 +640,9 @@ class TVShows(Items):
                     WHERE idShow = ?
                 '''
                 kodicursor.execute(query, (title, plot, rating_id,
-                                           premieredate, genre, title, tvdb,
-                                           mpaa, studio, sorttitle, showid))
+                                           premieredate, genre, title,
+                                           uniqueid, mpaa, studio, sorttitle,
+                                           showid))
             else:
                 # Update the tvshow entry
                 query = '''
@@ -679,11 +689,15 @@ class TVShows(Items):
                                          rating,
                                          votecount)
                 # add new uniqueid Kodi 17
-                self.kodi_db.add_uniqueid(self.kodi_db.create_entry_uniqueid(),
-                                          showid,
-                                          v.KODI_TYPE_SHOW,
-                                          tvdb,
-                                          "tvdb")
+                if tvdb is not None:
+                    uniqueid = self.kodi_db.create_entry_uniqueid()
+                    self.kodi_db.add_uniqueid(uniqueid,
+                                              showid,
+                                              v.KODI_TYPE_SHOW,
+                                              tvdb,
+                                              "unknown")
+                else:
+                    uniqueid = -1
                 # Create the tvshow entry
                 query = '''
                     INSERT INTO tvshow(
@@ -692,8 +706,8 @@ class TVShows(Items):
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 '''
                 kodicursor.execute(query, (showid, title, plot, rating_id,
-                                           premieredate, genre, title, tvdb,
-                                           mpaa, studio, sorttitle))
+                                           premieredate, genre, title,
+                                           uniqueid, mpaa, studio, sorttitle))
             else:
                 # Create the tvshow entry
                 query = '''
@@ -877,9 +891,9 @@ class TVShows(Items):
         seasonid = self.kodi_db.addSeason(showid, season)
 
         # GET THE FILE AND PATH #####
-        doIndirect = not self.directpath
+        doIndirect = not state.DIRECT_PATHS
         playurl = API.getFilePath(forceFirstMediaStream=True)
-        if self.directpath:
+        if state.DIRECT_PATHS:
             # Direct paths is set the Kodi way
             if playurl is None:
                 # Something went wrong, trying to use non-direct paths
@@ -1101,7 +1115,7 @@ class TVShows(Items):
         self.kodi_db.addStreams(fileid, streams, runtime)
         # Process playstates
         self.kodi_db.addPlaystate(fileid, resume, runtime, playcount, dateplayed)
-        if not self.directpath and resume:
+        if not state.DIRECT_PATHS and resume:
             # Create additional entry for widgets. This is only required for plugin/episode.
             temppathid = self.kodi_db.getPath("plugin://plugin.video.plexkodiconnect/tvshows/")
             tempfileid = self.kodi_db.addFile(filename, temppathid)
@@ -1174,10 +1188,9 @@ class TVShows(Items):
                                                      v.KODI_TYPE_SEASON)
                 for season in seasons:
                     self.removeSeason(season[1])
-                else:
-                    # Delete plex season entries
-                    plex_db.removeItems_byParentId(showid,
-                                                   v.KODI_TYPE_SEASON)
+                # Delete plex season entries
+                plex_db.removeItems_byParentId(showid,
+                                               v.KODI_TYPE_SEASON)
                 self.removeShow(showid)
                 plex_db.removeItem(show[0])
 
@@ -1193,14 +1206,12 @@ class TVShows(Items):
                     seasonid, v.KODI_TYPE_EPISODE)
                 for episode in season_episodes:
                     self.removeEpisode(episode[1], episode[2])
-                else:
-                    # Remove plex episodes
-                    plex_db.removeItems_byParentId(seasonid,
-                                                   v.KODI_TYPE_EPISODE)
-            else:
-                # Remove plex seasons
-                plex_db.removeItems_byParentId(kodiid,
-                                               v.KODI_TYPE_SEASON)
+                # Remove plex episodes
+                plex_db.removeItems_byParentId(seasonid,
+                                               v.KODI_TYPE_EPISODE)
+            # Remove plex seasons
+            plex_db.removeItems_byParentId(kodiid,
+                                           v.KODI_TYPE_SEASON)
 
             # Remove tvshow
             self.removeShow(kodiid)
@@ -1213,9 +1224,8 @@ class TVShows(Items):
                                                          v.KODI_TYPE_EPISODE)
             for episode in season_episodes:
                 self.removeEpisode(episode[1], episode[2])
-            else:
-                # Remove plex episodes
-                plex_db.removeItems_byParentId(kodiid, v.KODI_TYPE_EPISODE)
+            # Remove plex episodes
+            plex_db.removeItems_byParentId(kodiid, v.KODI_TYPE_EPISODE)
             
             # Remove season
             self.removeSeason(kodiid)
@@ -1623,8 +1633,8 @@ class Music(Items):
         mood = ' / '.join(moods)
 
         # GET THE FILE AND PATH #####
-        doIndirect = not self.directpath
-        if self.directpath:
+        doIndirect = not state.DIRECT_PATHS
+        if state.DIRECT_PATHS:
             # Direct paths is set the Kodi way
             playurl = API.getFilePath(forceFirstMediaStream=True)
             if playurl is None:

@@ -23,7 +23,7 @@
 	<category label="Plex">
 		<setting type="lsep" label="plex.tv"/>
 		<setting id="plex_status" label="39071" type="text" default="Not logged in to plex.tv" enable="false" /><!-- Current plex.tv status: -->
-		<setting id="plexLogin" label="Plex user:" type="text" default="" enable="false" />
+		<setting id="plexLogin" label="39228" type="text" default="" enable="false" />
 		<setting id="myplexlogin" label="39025" type="bool" default="true" /> <!-- Log into plex.tv on startup -->
 		<setting label="39209" type="action" action="RunPlugin(plugin://plugin.video.plexkodiconnect?mode=togglePlexTV)" option="close" />
 		<setting id="plexhome" label="Plex home in use" type="bool" default="" visible="false" />
@@ -59,6 +59,7 @@
 		<setting id="dbSyncScreensaver" type="bool" label="39062" default="false" /><!--Sync when screensaver is deactivated-->
 
 		<setting type="lsep" label="30538" /><!-- Complete Re-Sync necessary -->
+		<setting id="indicate_media_versions" type="bool" label="39719" default="false" /><!-- Replace user ratings with number of versions -->
 		<setting id="enableMusic" type="bool" label="30509" default="true" />
 		<setting id="useDirectPaths" type="enum" label="30511" values="Addon(Default)|Native(Direct paths)" default="0" visible="true"/> <!-- Playback mode -->
 
@@ -68,7 +69,7 @@
         <setting id="enableExportSongRating" type="bool" label="30525" default="false" visible="false" />
         <setting id="kodiplextimeoffset" type="number" label="Time difference in seconds (Koditime - Plextime)" default="0" visible="false" option="int" />
         <setting id="enableUpdateSongRating" type="bool" label="30526" default="false" visible="false" />
-        <setting id="themoviedbAPIKey" type="text" default="ae06df54334aa653354e9a010f4b81cb" visible="false"/>
+        <setting id="themoviedbAPIKey" type="text" default="19c90103adb9e98f2172c6a6a3d85dc4" visible="false"/>
         <setting id="FanArtTVAPIKey" type="text" default="639191cb0774661597f28a47e7e2bad5" visible="false"/>
 	</category>
 
@@ -110,6 +111,7 @@
 	    <setting id="bestQuality" type="bool" label="30541" default="false" />
 	    <setting id="bestTrailer" type="bool" label="30542" default="true" />
 	    <setting id="force_transcode_pix" type="bool" label="30545" default="false" />
+	    <setting id="kodi_video_cache" type="number" visible="false" default="20971520" />
 	</category>
 
 	<category label="30544"><!-- artwork -->
